@@ -1,0 +1,10 @@
+{
+  "name": "laplace-watch",
+  "private": true,
+  "type": "module",
+  "description": "Off-box dead-man's switch for the Laplace hourly record (Cloudflare Worker, cron).",
+  "scripts": {
+    "test": "node --test",
+    "deploy": "wrangler deploy"
+  }
+}
