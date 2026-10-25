@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
+from typing import Any
 
 from eth_hash.auto import keccak
 
@@ -30,6 +31,17 @@ class Verified:
 def _check(ok: bool, message: str) -> None:
     if not ok:
         raise VerificationError(message)
+
+
+def _members_at(spec: dict[str, Any], horizon: int) -> list[dict[str, Any]]:
+    """A pool specification's members and weights at one horizon."""
+    if spec["kind"] == "linear-pool":
+        members: list[dict[str, Any]] = spec["members"]
+        return members
+    if spec["kind"] == "linear-pool-by-horizon":
+        by_horizon: list[dict[str, Any]] = spec["horizons"][str(horizon)]
+        return by_horizon
+    raise VerificationError(f"unknown pool kind {spec['kind']}")
 
 
 def verify(manifest: bytes, forecasts: bytes) -> Verified:
@@ -58,9 +70,9 @@ def verify(manifest: bytes, forecasts: bytes) -> Verified:
         if x["kind"] != "pool" or not any(k[0] == x["name"] for k in by_question):
             continue
         _check(hex32(bytes(keccak(canonical(x["spec"])))) == x["id"], f"pool {x['name']}: id is not its spec's hash")
-        members = [(names[mm["forecaster"]], mm["weight"]) for mm in x["spec"]["members"]]
         for asset in assets:
             for horizon in m["feed"]["horizons"]:
+                members = [(names[mm["forecaster"]], mm["weight"]) for mm in _members_at(x["spec"], horizon)]
                 inputs = [by_question[(n, asset, horizon)] for n, _ in members]
                 expected = mix_basis_points(inputs, [w for _, w in members])
                 _check(

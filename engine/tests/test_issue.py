@@ -8,7 +8,8 @@ from eth_hash.auto import keccak
 
 from laplace_engine.baselines import NAIVE
 from laplace_engine.issue import Ledger, run_release, seal
-from laplace_engine.release import Pool, Program, Release
+from laplace_engine.quantize import mix_basis_points
+from laplace_engine.release import HorizonPool, Pool, Program, Release
 from laplace_engine.verify import VerificationError, verify
 from laplace_research.evolve.feed import ASSETS, HORIZONS
 from laplace_research.evolve.panel import Panel
@@ -97,3 +98,23 @@ def test_a_pool_is_skipped_when_a_member_fails(tmp_path: Path, make_panel: Calla
     assert set(sealed.failures) == {"broken", "demon"}
     assert sealed.leaves == len(ASSETS) * len(HORIZONS)
     assert verify(sealed.manifest, sealed.forecasts).pools_checked == 0
+
+
+def test_a_per_horizon_pool_is_sealed_and_recomputed_exactly(tmp_path: Path, make_panel: Callable[..., Panel]) -> None:
+    programs = (Program("naive", NAIVE, True, "baseline"), Program("wider", WIDER, False, "test#1"))
+    by_horizon = tuple(
+        (h, (("naive", 1_000_000 - 100_000 * i), ("wider", 100_000 * i))) for i, h in enumerate(HORIZONS, 1)
+    )
+    rel = Release("t3", "test", programs, (HorizonPool("demon-h", by_horizon),))
+    finals, failures = run_release(rel, make_panel(), tmp_path, workers=2)
+    sealed = seal(ISSUE, rel, make_panel(), finals, failures, ledger=LEDGER, commit=None)
+    assert verify(sealed.manifest, sealed.forecasts).pools_checked == 1
+    body = json.loads(sealed.forecasts)
+    by_question = {(f["forecaster"], f["asset"], f["horizon"]): f["bps"] for f in body["forecasts"]}
+    for h, weights in by_horizon:
+        expected = mix_basis_points([by_question[(n, "BTC", h)] for n, _ in weights], [w for _, w in weights])
+        assert by_question[("demon-h", "BTC", h)] == list(expected)
+    last = body["forecasts"][-1]
+    last["bps"][4], last["bps"][5] = last["bps"][4] + 1, last["bps"][5] - 1
+    with pytest.raises(VerificationError):
+        verify(sealed.manifest, json.dumps(body).encode())

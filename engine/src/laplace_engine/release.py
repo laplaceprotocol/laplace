@@ -48,21 +48,70 @@ class Program:
         return bytes(keccak(self.source.encode()))
 
 
+Weights = tuple[tuple[str, int], ...]  # (program name, parts per million), summing to WEIGHT_SCALE
+
+
+def _check(name: str, weights: Weights) -> None:
+    if sum(w for _, w in weights) != WEIGHT_SCALE or any(w <= 0 for _, w in weights):
+        raise ValueError(f"pool {name}: weights must be positive and sum to {WEIGHT_SCALE}")
+
+
+def _members(weights: Weights, program_ids: Mapping[str, bytes]) -> list[dict[str, Any]]:
+    return [{"forecaster": hex32(program_ids[name]), "weight": w} for name, w in weights]
+
+
 @dataclass(frozen=True)
 class Pool:
+    """A linear pool with the same weights at every horizon."""
+
     name: str
-    weights: tuple[tuple[str, int], ...]  # (program name, parts per million), summing to WEIGHT_SCALE
+    weights: Weights
 
     def __post_init__(self) -> None:
-        if sum(w for _, w in self.weights) != WEIGHT_SCALE or any(w <= 0 for _, w in self.weights):
-            raise ValueError(f"pool {self.name}: weights must be positive and sum to {WEIGHT_SCALE}")
+        _check(self.name, self.weights)
+
+    def members(self) -> set[str]:
+        return {name for name, _ in self.weights}
+
+    def weights_at(self, horizon: int) -> Weights:
+        return self.weights
 
     def spec(self, program_ids: Mapping[str, bytes]) -> dict[str, Any]:
-        members = [{"forecaster": hex32(program_ids[name]), "weight": w} for name, w in self.weights]
-        return {"kind": "linear-pool", "members": members, "weight_scale": WEIGHT_SCALE}
+        return {"kind": "linear-pool", "members": _members(self.weights, program_ids), "weight_scale": WEIGHT_SCALE}
 
     def id(self, program_ids: Mapping[str, bytes]) -> bytes:
         return bytes(keccak(canonical(self.spec(program_ids))))
+
+
+@dataclass(frozen=True)
+class HorizonPool:
+    """A linear pool with its own weights at each horizon."""
+
+    name: str
+    by_horizon: tuple[tuple[int, Weights], ...]
+
+    def __post_init__(self) -> None:
+        horizons = [h for h, _ in self.by_horizon]
+        if len(set(horizons)) != len(horizons):
+            raise ValueError(f"pool {self.name}: each horizon needs exactly one set of weights")
+        for h, weights in self.by_horizon:
+            _check(f"{self.name} at {h}h", weights)
+
+    def members(self) -> set[str]:
+        return {name for _, weights in self.by_horizon for name, _ in weights}
+
+    def weights_at(self, horizon: int) -> Weights:
+        return dict(self.by_horizon)[horizon]
+
+    def spec(self, program_ids: Mapping[str, bytes]) -> dict[str, Any]:
+        horizons = {str(h): _members(weights, program_ids) for h, weights in self.by_horizon}
+        return {"kind": "linear-pool-by-horizon", "horizons": horizons, "weight_scale": WEIGHT_SCALE}
+
+    def id(self, program_ids: Mapping[str, bytes]) -> bytes:
+        return bytes(keccak(canonical(self.spec(program_ids))))
+
+
+AnyPool = Pool | HorizonPool
 
 
 @dataclass(frozen=True)
@@ -70,16 +119,20 @@ class Release:
     name: str
     notes: str
     programs: tuple[Program, ...]
-    pools: tuple[Pool, ...]
+    pools: tuple[AnyPool, ...]
 
     def __post_init__(self) -> None:
         names = [p.name for p in self.programs] + [p.name for p in self.pools]
         if len(set(names)) != len(names):
             raise ValueError("forecaster names must be unique within a release")
         for pool in self.pools:
-            unknown = {name for name, _ in pool.weights} - {p.name for p in self.programs}
+            unknown = pool.members() - {p.name for p in self.programs}
             if unknown:
                 raise ValueError(f"pool {pool.name} has members outside the release: {sorted(unknown)}")
+        ids = self.ids()
+        if len(set(ids.values())) != len(ids):
+            shared = sorted(n for n, i in ids.items() if list(ids.values()).count(i) > 1)
+            raise ValueError(f"forecasters {', '.join(shared)} share an identity: their leaves would collide")
 
     def program_ids(self) -> dict[str, bytes]:
         return {p.name: p.id for p in self.programs}
@@ -118,7 +171,8 @@ def write(release: Release, release_dir: Path, private_dir: Path) -> None:
 def load(release_dir: Path, private_dir: Path | None) -> Release:
     """Read a release, refusing any source or pool whose identity differs from the release file."""
     body = json.loads((release_dir / RELEASE_FILE).read_text())
-    programs, pools = [], []
+    programs: list[Program] = []
+    pools: list[AnyPool] = []
     for entry in body["forecasters"]:
         if entry["kind"] == "program":
             if entry["public"]:
@@ -135,8 +189,17 @@ def load(release_dir: Path, private_dir: Path | None) -> Release:
     names = {hex32(i): n for n, i in ids.items()}
     for entry in body["forecasters"]:
         if entry["kind"] == "pool":
-            weights = tuple((names[m["forecaster"]], int(m["weight"])) for m in entry["spec"]["members"])
-            pool = Pool(entry["name"], weights)
+            spec = entry["spec"]
+
+            def named(members: list[dict[str, Any]]) -> Weights:
+                return tuple((names[m["forecaster"]], int(m["weight"])) for m in members)
+
+            pool: AnyPool
+            if spec["kind"] == "linear-pool":
+                pool = Pool(entry["name"], named(spec["members"]))
+            else:
+                by_horizon = tuple((int(h), named(members)) for h, members in sorted(spec["horizons"].items()))
+                pool = HorizonPool(entry["name"], tuple(sorted(by_horizon)))
             if hex32(pool.id(ids)) != entry["id"]:
                 raise ReleaseMismatch(f"{entry['name']}: specification hash differs from the release")
             pools.append(pool)

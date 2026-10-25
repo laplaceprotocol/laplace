@@ -103,15 +103,18 @@ def basis_points(release: Release, finals: dict[str, FloatArray]) -> tuple[Forec
             out[p.name] = [[to_basis_points(f[a, j]) for j in range(len(HORIZONS))] for a in range(len(ASSETS))]
     failures = {}
     for pool in release.pools:
-        missing = [m for m, _ in pool.weights if m not in out]
+        missing = sorted(m for m in pool.members() if m not in out)
         if missing:
             failures[pool.name] = f"members without a forecast: {', '.join(missing)}"
             continue
-        weights = [w for _, w in pool.weights]
-        out[pool.name] = [
-            [mix_basis_points([out[m][a][j] for m, _ in pool.weights], weights) for j in range(len(HORIZONS))]
-            for a in range(len(ASSETS))
-        ]
+        rows: list[list[tuple[int, ...]]] = []
+        for a in range(len(ASSETS)):
+            row = []
+            for j, h in enumerate(HORIZONS):
+                weights = pool.weights_at(h)
+                row.append(mix_basis_points([out[m][a][j] for m, _ in weights], [w for _, w in weights]))
+            rows.append(row)
+        out[pool.name] = rows
     return out, failures
 
 
