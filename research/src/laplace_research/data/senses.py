@@ -6,6 +6,8 @@
   5-minute candles. A 5-minute interval without trades repeats the previous close, so it adds nothing.
 - **Perpetual funding:** Binance USDT-margined perpetuals' funding rate, settled every eight hours; a rate is known
   from its settlement time.
+- **Open interest:** Bybit USDT perpetuals' open interest in coins, as hourly snapshots stamped with their time
+  (Binance keeps only 30 days of history).
 
 Every function returns values keyed by Unix seconds and only includes periods that have fully closed, so nothing
 here can carry information from after the moment it describes.
@@ -29,6 +31,9 @@ DVOL_CURRENCIES = ("BTC", "ETH")
 DERIBIT = "https://www.deribit.com/api/v2/public/get_volatility_index_data"
 COINBASE = "https://api.exchange.coinbase.com/products/{product}/candles"
 BINANCE_FUNDING = "https://fapi.binance.com/fapi/v1/fundingRate"
+BYBIT_OPEN_INTEREST = "https://api.bybit.com/v5/market/open-interest"
+BYBIT_PAGE = 200  # the API's largest page
+BYBIT_MAX_PAGES = 8  # a month of hourly snapshots is four pages; more means the API is misbehaving
 REQUEST_INTERVAL_S = 0.15
 
 
@@ -172,3 +177,47 @@ def funding_rates(
         out += [(int(t), float(rate)) for t, rate in rows]
     lo, hi = int(start.timestamp()), int(end.timestamp())
     return sorted({t: r for t, r in out if lo <= t < hi}.items())
+
+
+def open_interest_hourly(
+    symbol: str, start: datetime, end: datetime, *, client: httpx.Client, cache_dir: Path
+) -> dict[int, float]:
+    """``{snapshot time: open interest in coins}`` of a Bybit USDT perpetual, hourly snapshots in ``[start, end)``
+    taken at least an hour ago."""
+    out: dict[int, float] = {}
+    for first, following in _months(start, end):
+        lo, hi = int(first.timestamp()), int(following.timestamp())
+
+        def fetch(lo: int = lo, hi: int = hi) -> list[list[float]]:
+            rows: dict[int, float] = {}
+            cursor, seen = "", set()
+            for _ in range(BYBIT_MAX_PAGES):
+                params = {
+                    "category": "linear",
+                    "symbol": symbol,
+                    "intervalTime": "1h",
+                    "startTime": lo * 1000,
+                    "endTime": hi * 1000 - 1,
+                    "limit": BYBIT_PAGE,
+                    "cursor": cursor,
+                }
+                body = _get(client, BYBIT_OPEN_INTEREST, params)
+                if body.get("retCode") != 0:
+                    raise RuntimeError(f"bybit open interest for {symbol}: {body.get('retMsg')}")
+                page = body["result"]["list"]
+                rows |= {int(r["timestamp"]) // 1000: float(r["openInterest"]) for r in page}
+                cursor = body["result"].get("nextPageCursor") or ""
+                if not cursor or not page:
+                    break
+                if cursor in seen:
+                    raise RuntimeError(f"bybit open interest for {symbol}: the page cursor repeats")
+                seen.add(cursor)
+            else:
+                raise RuntimeError(f"bybit open interest for {symbol}: more than {BYBIT_MAX_PAGES} pages for a month")
+            return [[t, v] for t, v in sorted(rows.items()) if lo <= t < hi]
+
+        for stamp, value in _cached(cache_dir / f"oi-{symbol}-{first:%Y%m}.json", following, fetch):
+            if stamp + HOUR <= time.time():
+                out[int(stamp)] = float(value)
+    lo, hi = int(start.timestamp()), int(end.timestamp())
+    return {t: v for t, v in out.items() if lo <= t < hi}

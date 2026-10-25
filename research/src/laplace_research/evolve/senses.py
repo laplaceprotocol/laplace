@@ -6,6 +6,8 @@ so the past-only history reader can serve senses exactly like candles. Unavailab
 - ``dvol``: the asset's 30-day implied volatility index (annualized percent) at the end of hour t; BTC and ETH only.
 - ``rv``: the hour's realized variance from 5-minute log returns.
 - ``funding``: the asset's perpetual funding rate at its last settlement at or before the end of hour t.
+- ``oi``: the asset's perpetual open interest (Bybit, in coins) at the start of hour t, an hour before the forecast:
+  the latest hourly snapshot that is surely published by then.
 """
 
 from __future__ import annotations
@@ -21,7 +23,7 @@ from laplace_research.data import senses as sources
 from laplace_research.evolve.feed import FloatArray, IntArray, product
 from laplace_research.evolve.panel import Panel, utc
 
-NAMES = ("dvol", "funding", "rv")
+NAMES = ("dvol", "funding", "oi", "rv")
 HOUR = 3600
 FUNDING_LOOKBACK = timedelta(hours=8)
 
@@ -89,10 +91,17 @@ def build(
                 rates = sources.funding_rates(symbol, start - FUNDING_LOOKBACK, end, client=client, cache_dir=cache_dir)
                 out["funding"][i] = carry_forward(rates, panel.ts + HOUR)
 
+            def oi(i: int = i, asset: str = asset) -> None:
+                values = sources.open_interest_hourly(
+                    funding_symbol(asset), start, end, client=client, cache_dir=cache_dir
+                )
+                out["oi"][i] = [values.get(int(t), np.nan) for t in panel.ts]
+
             attempt("rv", asset, rv)
             if asset in sources.DVOL_CURRENCIES:
                 attempt("dvol", asset, dvol)
             attempt("funding", asset, funding)
+            attempt("oi", asset, oi)
     finally:
         if own_client:
             client.close()

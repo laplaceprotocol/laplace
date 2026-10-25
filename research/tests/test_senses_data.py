@@ -47,14 +47,69 @@ def test_failing_sources_leave_senses_unknown_when_problems_are_collected(monkey
     monkeypatch.setattr(senses.sources, "realized_hourly", lambda *a, **k: {int(t): 0.5 for t in hours})
     monkeypatch.setattr(senses.sources, "dvol_hourly", broken)
     monkeypatch.setattr(senses.sources, "funding_rates", lambda *a, **k: [(int(hours[0]), 0.0001)])
+    monkeypatch.setattr(senses.sources, "open_interest_hourly", lambda *a, **k: {int(t): 1e6 for t in hours[1:]})
     problems: list[str] = []
     out = senses.build(panel, Path("/nonexistent"), problems=problems)
     assert problems == ["dvol for BTC: ConnectionError: down"]  # SOL has no index to fetch
     assert np.isnan(out["dvol"]).all()
     assert (out["rv"] == 0.5).all()
     assert (out["funding"] == 0.0001).all()
+    assert np.isnan(out["oi"][:, 0]).all()  # no snapshot for the first hour
+    assert (out["oi"][:, 1:] == 1e6).all()
     with pytest.raises(ConnectionError):
         senses.build(panel, Path("/nonexistent"))
+
+
+def test_open_interest_follows_the_cursor_and_keeps_only_old_snapshots(tmp_path: Path) -> None:
+    import json
+    import time
+    from datetime import UTC, datetime
+
+    import httpx
+
+    from laplace_research.data.senses import open_interest_hourly
+
+    month = datetime(2025, 10, 1, tzinfo=UTC)
+    first = int(month.timestamp())
+    stamps = [first + k * HOUR for k in range(5)]
+    pages = {"": (stamps[3:], "next"), "next": (stamps[:3], "")}  # newest first, as the API pages
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        rows, cursor = pages[request.url.params.get("cursor", "")]
+        page = [{"openInterest": str(1000 + t // HOUR % 100), "timestamp": str(t * 1000)} for t in reversed(rows)]
+        body = {"retCode": 0, "retMsg": "OK", "result": {"list": page, "nextPageCursor": cursor}}
+        return httpx.Response(200, text=json.dumps(body))
+
+    with httpx.Client(transport=httpx.MockTransport(handler)) as client:
+        out = open_interest_hourly(
+            "BTCUSDT", month, datetime.fromtimestamp(first + 5 * HOUR, UTC), client=client, cache_dir=tmp_path
+        )
+    assert sorted(out) == stamps
+    assert out[stamps[2]] == 1000 + stamps[2] // HOUR % 100
+    assert all(t + HOUR <= time.time() for t in out)
+
+
+@pytest.mark.parametrize("cursors", ["repeat", "endless"])
+def test_open_interest_stops_when_the_pages_never_end(tmp_path: Path, cursors: str) -> None:
+    import json
+    from datetime import UTC, datetime
+    from itertools import count
+
+    import httpx
+
+    from laplace_research.data.senses import open_interest_hourly
+
+    month = datetime(2025, 10, 1, tzinfo=UTC)
+    fresh = count()
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        cursor = "again" if cursors == "repeat" else f"page{next(fresh)}"
+        row = {"openInterest": "1", "timestamp": str(int(month.timestamp()) * 1000)}
+        body = {"retCode": 0, "retMsg": "OK", "result": {"list": [row], "nextPageCursor": cursor}}
+        return httpx.Response(200, text=json.dumps(body))
+
+    with httpx.Client(transport=httpx.MockTransport(handler)) as client, pytest.raises(RuntimeError, match="page"):
+        open_interest_hourly("BTCUSDT", month, datetime(2025, 10, 2, tzinfo=UTC), client=client, cache_dir=tmp_path)
 
 
 def test_a_source_that_is_down_is_not_asked_again_for_the_other_assets(monkeypatch: pytest.MonkeyPatch) -> None:
