@@ -29,7 +29,7 @@ def build_parser() -> argparse.ArgumentParser:
     majors.add_argument("--agents", help="comma-separated model/directive ids (default: all)")
 
     evolve = sub.add_parser("evolve", help="evolutionary search over forecasting programs (PoC 2)")
-    evolve.add_argument("action", choices=["init", "run", "report", "senses"])
+    evolve.add_argument("action", choices=["init", "run", "report", "senses", "events"])
     evolve.add_argument("--run-id", required=True)
     evolve.add_argument("--generations", type=int, default=4)
     evolve.add_argument("--children", type=int, default=2, help="children per island per generation")
@@ -80,6 +80,20 @@ def main(argv: list[str] | None = None) -> int:
             panel.with_senses(senses.build(panel, CACHE / "senses")).save(run_dir / "panel.npz")
             for name, values in Panel.load(run_dir / "panel.npz").senses.items():
                 print(f"{name}: {np.isfinite(values).mean(axis=1).round(3).tolist()} of hours known, per asset")
+        elif args.action == "events":
+            import json
+
+            from laplace_research.data import events
+            from laplace_research.evolve.event_study import event_study, overlay_screen, render, render_screen
+
+            run = Run(run_dir)
+            study = event_study(run.panel, events.load())
+            print(render(study))
+            if "rv" in run.panel.senses and "dvol" in run.panel.senses:
+                study["overlay_screen"] = overlay_screen(run.panel, run.config, events.load())
+                print()
+                print(render_screen(study["overlay_screen"]))
+            (run_dir / "events.json").write_text(json.dumps(study, indent=1) + "\n")
         elif args.action == "run":
             asyncio.run(Run(run_dir).evolve(args.generations, args.children, args.workers))
         else:

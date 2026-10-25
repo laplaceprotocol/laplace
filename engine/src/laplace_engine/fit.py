@@ -104,7 +104,8 @@ def compare(
 
 
 def sense_baselines(run_dir: Path) -> list[Program]:
-    """RV-HAR and IV-HAR as programs, with parameters fitted on the run's search window (needs a panel with senses)."""
+    """RV-HAR, IV-HAR and EV-HAR as programs, with parameters fitted on the run's search window (needs a panel with
+    senses)."""
     from laplace_engine.baselines import ladder_programs
     from laplace_research.evolve.baselines import ladder
     from laplace_research.evolve.run import parse_utc
@@ -117,8 +118,15 @@ def sense_baselines(run_dir: Path) -> list[Program]:
     start, end, _ = config.search
     fit_range = slice(panel.index_at_or_after(parse_utc(start)), panel.index_at_or_after(parse_utc(end)))
     rungs = ladder(
-        panel.close, realized_bins(panel, fit.times), fit.times, fit_range, senses=panel.senses, assets=panel.assets
+        panel.close,
+        realized_bins(panel, fit.times),
+        fit.times,
+        fit_range,
+        senses=panel.senses,
+        assets=panel.assets,
+        ts=panel.ts,
     )
     where = f"{run_dir.name}'s search window ({start[:10]} to {end[:10]})"
     sources = ladder_programs(rungs, panel.assets, where)
-    return [Program(n, sources[n], True, f"baseline fitted on {where}") for n in ("rv-har", "iv-har") if n in sources]
+    names = ("rv-har", "iv-har", "ev-har")
+    return [Program(n, sources[n], True, f"baseline fitted on {where}") for n in names if n in sources]

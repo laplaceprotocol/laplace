@@ -1,3 +1,5 @@
+from datetime import datetime
+
 import numpy as np
 import pytest
 
@@ -87,3 +89,53 @@ def test_sense_baselines_follow_their_research_formulas(panel: Panel, tmp_path) 
                 expected = student_t_probs(np.sqrt(variance), rung.nu[h], edges(h))
                 got = np.asarray(fn(reader.context(a, t, h)))
                 assert got == pytest.approx(expected, abs=1e-12), (name, a, h)
+
+
+def test_ev_har_program_computes_the_research_overlay(panel: Panel, tmp_path) -> None:  # type: ignore[no-untyped-def]
+    from laplace_research.data.events import load as load_calendar
+
+    rng = np.random.default_rng(5)
+    r2 = b.hourly_returns(panel.close) ** 2
+    rv = r2 * rng.uniform(0.5, 1.5, r2.shape)
+    dvol = np.full(panel.close.shape, np.nan)
+    dvol[0] = 100 * np.sqrt(b.trailing_mean(r2[0], 168) * b.HOURS_PER_YEAR)
+    senses = {"rv": rv, "dvol": dvol}
+    fit = sample_times(panel, utc(int(panel.ts[0])), utc(int(panel.ts[800])), 3)
+    rungs = b.ladder(
+        panel.close,
+        realized_bins(panel, fit),
+        fit,
+        slice(0, 800),
+        senses=senses,
+        assets=panel.assets,
+        ts=panel.ts,
+    )
+    sources = ladder_programs(rungs, panel.assets, "a synthetic window")
+    assert list(sources)[-3:] == ["rv-har", "iv-har", "ev-har"]
+    ev = rungs[-1]
+    fn = load(sources["ev-har"])
+
+    path = tmp_path / "panel.npz"
+    panel.with_senses(senses).save(path)
+    reader = HistoryReader(*ensure_history(path))
+    calendar = load_calendar()
+    # forecasts before, at and after the CPI release of 2026-10-14 (12:30 UTC), and on a session's edges
+    for when in ("2026-10-14T10:00", "2026-10-14T12:00", "2026-10-14T14:00", "2026-10-16T19:00", "2026-10-18T09:00"):
+        at = int(datetime.fromisoformat(when + "+00:00").timestamp())
+        t = int(np.searchsorted(panel.ts, at - 3600))
+        reader.advance_to(t)
+        r = np.diff(np.log(panel.close[:, t + 1 - LOOKBACK : t + 1]))
+        window_rv = rv[:, t + 2 - LOOKBACK : t + 1]
+        filled = np.where(np.isfinite(window_rv), window_rv, r * r)
+        for a in (0, 3):
+            means = np.array([filled[a, -w:].mean() for w in ev.params["windows"]])
+            implied = dvol[a, t] if np.isfinite(dvol[a, t]) else dvol[0, t]
+            implied = (implied / 100) ** 2 / b.HOURS_PER_YEAR if np.isfinite(implied) else means[3]
+            for h in HORIZONS:
+                c = np.asarray(ev.params["per_asset"][a][str(h)])
+                variance = max(c[0] + float(c[1:] @ np.append(means, implied)) * h, 0.1 * means[2] * h)
+                x = b.overlay_features(calendar, np.array([at]), h)[0]
+                scale = np.exp(0.5 * x @ np.asarray(ev.params["overlay"][str(h)]["beta"]))
+                expected = student_t_probs(np.sqrt(variance) * scale, ev.nu[h], edges(h))
+                got = np.asarray(fn(reader.context(a, t, h)))
+                assert got == pytest.approx(expected, abs=1e-12), (when, a, h)

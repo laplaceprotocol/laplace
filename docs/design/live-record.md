@@ -112,6 +112,16 @@ forecast time. The dates are copied from the publishers' calendars into
 US Eastern Time with daylight saving. Every issue lists the events its programs saw and the calendar's hash, and the
 engine alerts 60 days before the calendar runs out. Nothing about what an event announces is ever an input.
 
+Release r1.3 (live from 2026-10-25) adds the first forecaster that uses them. **EV-HAR** scales IV-HAR's standard
+deviation for the hours known to move: weekends, the UTC hour, the US session and its open (placed by the calendar,
+so daylight saving is exact), and FOMC, CPI and jobs releases inside the window or just before or after it. Its
+coefficients are fitted by binned log score on PoC 2's search window. Two more pools of every program include it:
+**demon-plus-e** and **demon-he** (EV-HAR gets 27% of demon-he at 1 hour, 49% at 4 hours and 47% at 24 hours).
+r1.2's forecasters, identities and records are unchanged. On PoC 2's holdout, EV-HAR alone beats GARCH by +0.0185
+nats per 1- and 4-hour question, almost nine-tenths of the Demon's +0.0210, and demon-he is the best pool so far
+(+0.0276): development evidence, in [`screening.json`](../../engine/releases/r1.3/screening.json) and
+[the research note](../research/2026-10-25-scheduled-events.md).
+
 The baselines run as ordinary programs on the same 720-hour window, so their recursions start from the window
 rather than from the start of the research panel, and HAR's 720-hour mean covers the window's 719 returns. Rerun over
 the PoC 2 holdout (11,487 questions), the naive, EWMA and GARCH programs match the research baselines to within

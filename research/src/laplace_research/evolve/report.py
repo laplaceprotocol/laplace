@@ -98,7 +98,13 @@ def report(run_dir: Path, workers: int = 8) -> dict[str, Any]:
     members = [
         Member(b.name, "baseline", None, finalize(b.probs(val.times)), finalize(b.probs(hold.times)))
         for b in ladder(
-            panel.close, realized_bins(panel, fit.times), fit.times, fit_range, senses=panel.senses, assets=panel.assets
+            panel.close,
+            realized_bins(panel, fit.times),
+            fit.times,
+            fit_range,
+            senses=panel.senses,
+            assets=panel.assets,
+            ts=panel.ts,
         )
     ]
     naive_val, naive_hold = log_scores(members[0].validation, rv), log_scores(members[0].holdout, rh)
