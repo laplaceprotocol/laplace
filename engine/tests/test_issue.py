@@ -12,6 +12,7 @@ from laplace_engine.issue import Ledger, run_release, seal
 from laplace_engine.quantize import mix_basis_points
 from laplace_engine.release import HorizonPool, Pool, Program, Release
 from laplace_engine.verify import VerificationError, verify
+from laplace_research.data import events as calendar_data
 from laplace_research.evolve.feed import ASSETS, HORIZONS
 from laplace_research.evolve.panel import Panel
 
@@ -31,8 +32,9 @@ def release(*extra: Program) -> Release:
 @pytest.fixture(scope="module")
 def sealed_files(tmp_path_factory: pytest.TempPathFactory) -> tuple[bytes, bytes]:
     rel, panel = release(Program("broken", BROKEN, True, "test")), synthetic_panel()
-    finals, failures = run_release(rel, panel, tmp_path_factory.mktemp("work"), workers=3)
-    sealed = seal(ISSUE, rel, panel, finals, failures, ledger=LEDGER, commit="abc")
+    calendar = calendar_data.load()
+    finals, failures = run_release(rel, panel, tmp_path_factory.mktemp("work"), workers=3, calendar=calendar)
+    sealed = seal(ISSUE, rel, panel, finals, failures, ledger=LEDGER, commit="abc", calendar=calendar)
     assert sealed.failures.keys() == {"broken"}
     assert sealed.leaves == 3 * len(ASSETS) * len(HORIZONS)
     return sealed.manifest, sealed.forecasts
@@ -95,8 +97,8 @@ def test_a_pool_is_skipped_when_a_member_fails(tmp_path: Path, make_panel: Calla
         (Program("naive", NAIVE, True, "baseline"), Program("broken", BROKEN, True, "test")),
         (Pool("demon", (("naive", 500_000), ("broken", 500_000))),),
     )
-    finals, failures = run_release(rel, make_panel(), tmp_path, workers=2)
-    sealed = seal(ISSUE, rel, make_panel(), finals, failures, ledger=LEDGER, commit=None)
+    finals, failures = run_release(rel, make_panel(), tmp_path, workers=2, calendar=None)
+    sealed = seal(ISSUE, rel, make_panel(), finals, failures, ledger=LEDGER, commit=None, calendar=None)
     assert set(sealed.failures) == {"broken", "demon"}
     assert sealed.leaves == len(ASSETS) * len(HORIZONS)
     assert verify(sealed.manifest, sealed.forecasts).pools_checked == 0
@@ -108,8 +110,8 @@ def test_a_per_horizon_pool_is_sealed_and_recomputed_exactly(tmp_path: Path, mak
         (h, (("naive", 1_000_000 - 100_000 * i), ("wider", 100_000 * i))) for i, h in enumerate(HORIZONS, 1)
     )
     rel = Release("t3", "test", programs, (HorizonPool("demon-h", by_horizon),))
-    finals, failures = run_release(rel, make_panel(), tmp_path, workers=2)
-    sealed = seal(ISSUE, rel, make_panel(), finals, failures, ledger=LEDGER, commit=None)
+    finals, failures = run_release(rel, make_panel(), tmp_path, workers=2, calendar=None)
+    sealed = seal(ISSUE, rel, make_panel(), finals, failures, ledger=LEDGER, commit=None, calendar=None)
     assert verify(sealed.manifest, sealed.forecasts).pools_checked == 1
     body = json.loads(sealed.forecasts)
     by_question = {(f["forecaster"], f["asset"], f["horizon"]): f["bps"] for f in body["forecasts"]}
@@ -129,7 +131,7 @@ def test_inputs_record_the_senses_programs_saw(make_panel: Callable[..., Panel])
     rv = np.full(panel.close.shape, 1e-5)
     rv[1, -1] = np.nan
     with_senses = panel.with_senses({"rv": rv})
-    plain, sensed = inputs(panel), inputs(with_senses)
+    plain, sensed = inputs(panel, None), inputs(with_senses, None)
     assert "last_senses" not in plain
     assert sensed["keccak256"] != plain["keccak256"]
     assert sensed["keccak256_layout"].endswith("volume, then the senses rv)")
@@ -141,8 +143,16 @@ def test_inputs_record_the_senses_programs_saw(make_panel: Callable[..., Panel])
 def test_inputs_list_the_scheduled_events_programs_saw(make_panel: Callable[..., Panel]) -> None:
     from laplace_engine.issue import inputs
 
-    events = inputs(make_panel())["events"]  # forecast at 07:00 UTC on Friday 2026-10-23
+    events = inputs(make_panel(), calendar_data.load())["events"]  # forecast at 07:00 UTC on Friday 2026-10-23
     assert events["around"] == [[-17.5, "us-open"], [-11.0, "us-close"], [6.5, "us-open"], [13.0, "us-close"]]
     assert events["covers"] == ["2025-01-01", "2027-12-31"]
     assert (REPO / events["calendar"]).is_file()
     assert len(events["keccak256"]) == 66
+
+
+def test_without_a_calendar_the_manifest_says_programs_saw_no_events(make_panel: Callable[..., Panel]) -> None:
+    from laplace_engine.issue import inputs
+
+    events = inputs(make_panel(), None)["events"]
+    assert events["around"] == []
+    assert "unavailable" in events

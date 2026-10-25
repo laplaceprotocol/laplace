@@ -132,3 +132,11 @@ def test_overlay_inputs_by_hand(calendar: events.Calendar) -> None:
     early = inputs("2024-12-31T12:00", 4)  # before the calendar: only the clock-based inputs remain
     assert early["hour-12"] == pytest.approx(23 / 24)
     assert [early[k] for k in ("releases", "us-open", "us-session")] == [0, 0, 0]
+
+
+def test_the_empty_calendar_lists_nothing_and_a_loaded_one_knows_its_file(calendar: events.Calendar) -> None:
+    at = utc("2026-10-28T12:00")
+    assert events.EMPTY.around(at) == ()
+    assert events.EMPTY.count(events.RELEASES, np.array([at]), np.array([at + 24 * HOUR])).tolist() == [0]
+    assert calendar.source == events.DEFAULT
+    assert calendar.raw == events.DEFAULT.read_bytes()

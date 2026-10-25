@@ -25,6 +25,7 @@ from typing import Any
 
 import numpy as np
 
+from laplace_research.data import events
 from laplace_research.evolve.context import LOOKBACK
 from laplace_research.evolve.feed import HORIZONS, N_BINS, FloatArray, IntArray, bin_index
 from laplace_research.evolve.history import HistoryReader, ensure_history
@@ -84,6 +85,7 @@ def day_groups(panel: Panel, times: IntArray) -> list[str]:
 # ---- worker side -------------------------------------------------------------------------------------------------
 
 _HISTORY: tuple[Path, Path] | None = None
+_CALENDAR: Path | None = None  # the scheduled events contexts list; None lists none
 
 
 class _Timeout(Exception):
@@ -94,8 +96,8 @@ def _on_alarm(signum: int, frame: Any) -> None:
     raise _Timeout
 
 
-def _init_worker(data_path: str, meta_path: str) -> None:
-    global _HISTORY
+def _init_worker(data_path: str, meta_path: str, calendar_path: str) -> None:
+    global _HISTORY, _CALENDAR
     os.environ["OMP_NUM_THREADS"] = "1"
     resource.setrlimit(resource.RLIMIT_AS, (MEMORY_LIMIT_BYTES, MEMORY_LIMIT_BYTES))
     signal.signal(signal.SIGALRM, _on_alarm)
@@ -104,6 +106,7 @@ def _init_worker(data_path: str, meta_path: str) -> None:
     # program's restricted frame; the program's output is validated anyway.
     warnings.simplefilter("ignore")
     _HISTORY = (Path(data_path), Path(meta_path))
+    _CALENDAR = Path(calendar_path) if calendar_path else None
 
 
 @dataclass(frozen=True)
@@ -122,7 +125,11 @@ def _run(source: str, times: IntArray, time_limit_s: int) -> Outcome:
         fn = load(source)
     except ProgramRejected as exc:
         return Outcome(None, f"rejected: {exc}", 0.0)
-    reader = HistoryReader(*_HISTORY)
+    try:
+        calendar = events.load(_CALENDAR) if _CALENDAR is not None else events.EMPTY
+    except Exception as exc:  # a broken calendar fails this evaluation, not the process that runs it
+        return Outcome(None, f"calendar: {type(exc).__name__}: {exc}"[:400], 0.0)
+    reader = HistoryReader(*_HISTORY, calendar=calendar)
     out = np.empty((len(reader.assets), len(HORIZONS), len(times), N_BINS))
     signal.alarm(time_limit_s)
     try:
@@ -148,9 +155,10 @@ def _run(source: str, times: IntArray, time_limit_s: int) -> Outcome:
 class Evaluator:
     """A pool of spawned worker processes; each evaluation gets a fresh process that reads history forward."""
 
-    def __init__(self, panel_path: Path, workers: int) -> None:
+    def __init__(self, panel_path: Path, workers: int, *, calendar: Path | None = events.DEFAULT) -> None:
+        """``calendar``: the scheduled events contexts list (``data.events``); None lists none."""
         data_path, meta_path = ensure_history(panel_path)
-        self._history: tuple[str, str] = (str(data_path), str(meta_path))
+        self._history: tuple[str, str, str] = (str(data_path), str(meta_path), str(calendar) if calendar else "")
         self._workers = workers
         self._pool = self._new_pool()
 

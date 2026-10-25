@@ -30,7 +30,10 @@ Every run also reconciles the past: an issue whose commitment reached the chain 
 reply, a crash) is recovered from the chain and published; one that never reached it is marked as a gap. Each step is
 isolated, so a failure in one (an exchange outage during settlement, say) never stops the others, and anything left
 undone is retried on the next run, however old. Files are only published if they rebuild exactly the committed root
-and manifest hash.
+and manifest hash. Inputs from outside degrade instead of failing the hour. A sense whose source fails is unknown (a
+source that is unreachable or keeps throttling is not asked again that hour), and if the senses together take longer
+than two minutes, the hour is sealed with every sense unknown. A calendar that cannot be read means programs see no
+events, which the manifest says.
 
 The operator is alerted on Telegram whenever a run needs attention, and receives a daily digest; an off-box
 dead-man's switch on Cloudflare (`ops/watch`) checks the public record every hour, so even a dead engine host is
