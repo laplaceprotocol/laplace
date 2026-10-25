@@ -40,6 +40,14 @@ def build_parser() -> argparse.ArgumentParser:
     freeze.add_argument("--out", type=Path, required=True, help="release directory (public part, in the repo)")
     freeze.add_argument("--private", type=Path, required=True, help="where private program sources are kept")
 
+    extend = sub.add_parser("extend", help="add shadow forecasters to a release: the monkey and pools fitted on a run")
+    extend.add_argument("--from", dest="source", type=Path, required=True, help="the release to extend")
+    extend.add_argument("--private", type=Path, required=True)
+    extend.add_argument("--run", type=Path, required=True, help="research run whose validation window fits the pools")
+    extend.add_argument("--name", required=True)
+    extend.add_argument("--out", type=Path, required=True)
+    extend.add_argument("--workers", type=int, default=min(8, os.cpu_count() or 1))
+
     seal = sub.add_parser("issue", help="seal the current (or a given) issue; optionally commit and publish it")
     seal.add_argument("--release", type=Path, required=True)
     seal.add_argument("--private", type=Path, required=True)
@@ -112,6 +120,58 @@ def judging_entries(paths: list[Path], alerts: notify.Alerts) -> list[dict[str, 
         name = resolved.relative_to(REPO).as_posix() if resolved.is_relative_to(REPO) else resolved.name
         entries.append({"path": name, "keccak256": "0x" + bytes(keccak(resolved.read_bytes())).hex()})
     return entries
+
+
+def cmd_extend(args: argparse.Namespace) -> int:
+    """Release ``--name``: every forecaster of ``--from`` unchanged, plus the monkey and two pools of all programs
+    fitted on the run's validation window (one set of weights, and one per horizon), saved with a holdout screening."""
+    from laplace_engine import baselines, fit
+
+    base = release.load(args.source, args.private)
+    monkey = release.Program("monkey", baselines.MONKEY, True, "baseline: equal odds on every bin")
+    programs = (*base.programs, monkey)
+    windows = fit.run_windows(args.run, programs, workers=args.workers)
+    everyone = {p.name: windows.validation[p.name] for p in programs}
+    plus = release.Pool("demon-plus", fit.fit_weights(everyone, windows.realized_validation, HORIZONS))
+    by_horizon = tuple((h, fit.fit_weights(everyone, windows.realized_validation, (h,))) for h in HORIZONS)
+    notes = (
+        f"{base.name}'s forecasters unchanged, plus shadow forecasters: the monkey (equal odds on every bin) and "
+        f"pools of all {len(programs)} programs fitted by EM on the validation window of {args.run.name}: "
+        "demon-plus (one set of weights, left out if it fits to an existing pool's weights) and demon-h (its own "
+        "weights at each horizon). Exploratory: no rule judges them until they get one."
+    )
+    # A fitted pool identical to an existing one (EM can land on the same weights) would duplicate its leaves.
+    program_ids = {p.name: p.id for p in programs}
+    taken = set(program_ids.values()) | {pool.id(program_ids) for pool in base.pools}
+    new_pools: list[release.AnyPool] = []
+    for pool in (plus, release.HorizonPool("demon-h", by_horizon)):
+        if pool.id(program_ids) in taken:
+            log.warning("%s fits to the same weights as an existing forecaster; left out", pool.name)
+            continue
+        taken.add(pool.id(program_ids))
+        new_pools.append(pool)
+    extended = release.Release(args.name, notes, programs, (*base.pools, *new_pools))
+    release.write(extended, args.out, args.private)
+
+    holdout = {p.name: windows.holdout[p.name] for p in programs}
+    candidates = {pool.name: fit.mix(holdout, pool.weights_at) for pool in extended.pools}
+    screening = {
+        "run": args.run.name,
+        "note": "holdout gains as development evidence (the holdout was inspected before; the live record is the test)",
+        "weights": {pool.name: {str(h): dict(pool.weights_at(h)) for h in HORIZONS} for pool in extended.pools},
+        "holdout": fit.compare(windows, candidates),
+    }
+    (args.out / "screening.json").write_text(json.dumps(screening, indent=1) + "\n")
+    for name, by_opponent in screening["holdout"].items():
+        for opponent, row in by_opponent.items():
+            cells = "  ".join(
+                f"{scope} {r['mean']:+.4f} ({r['interval95'][0]:+.4f}..{r['interval95'][1]:+.4f})"
+                for scope, r in row.items()
+            )
+            print(f"{name:10s} vs {opponent:5s}  {cells}")
+    for entry in extended.describe():
+        print(f"{entry['name']:12s} {entry['kind']:8s} {entry['id']}")
+    return 0
 
 
 def seal_issue(args: argparse.Namespace, number: int, target: Path, judging: list[dict[str, str]]) -> None:
@@ -334,13 +394,17 @@ def cmd_alert(args: argparse.Namespace) -> int:
 def cmd_digest(args: argparse.Namespace) -> int:
     """A daily summary: the last 24 hours of the record, the scores so far, and the commit key's runway."""
     newest = candles.current_issue()
-    window = range(newest - 23, newest + 1)
+    issues = args.data / "issues"
+    on_disk = [int(d.name) for d in issues.iterdir() if d.name.isdigit()] if issues.exists() else []
+    first = min((n for n in on_disk if (issues / str(n) / "commitment.json").exists()), default=newest)
+    window = range(max(newest - 23, first), newest + 1)  # hours before the record began are not gaps
     committed = [n for n in window if (issue_dir(args.data, n) / "commitment.json").exists()]
     published = [n for n in committed if (issue_dir(args.data, n) / publish.PUBLISHED).exists()]
     missing = [n for n in window if n not in committed]
     lines = [f"📊 Laplace · daily digest · {datetime.now(UTC):%Y-%m-%d %H:%M} UTC"]
     lines.append(
-        f"Record: {len(committed)}/24 hours committed, {len(published)} published (issues {window[0]} to {window[-1]})"
+        f"Record: {len(committed)}/{len(window)} hours committed, {len(published)} published "
+        f"(issues {window[0]} to {window[-1]})"
         + (f"; missing: {', '.join(map(str, missing))}" if missing else "; no gaps")
     )
     board = settle.scoreboard(settle.load_settlements(args.data / "issues"))
@@ -478,6 +542,7 @@ def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     commands = {
         "release": cmd_release,
+        "extend": cmd_extend,
         "issue": cmd_issue,
         "verify": cmd_verify,
         "scoreboard": cmd_scoreboard,

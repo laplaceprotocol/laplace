@@ -12,6 +12,9 @@ uv run pytest
 
 # freeze a research run into a release (public part here, private champions elsewhere)
 uv run laplace-engine release --run ../research/runs/evolve-poc2 --name r1 --out releases/r1 --private PRIVATE_DIR
+# extend a release with the monkey and pools fitted on a run's validation window (r1 → r1.1)
+uv run laplace-engine extend --from releases/r1 --private PRIVATE_DIR --run ../research/runs/evolve-poc2 \
+  --name r1.1 --out releases/r1.1
 # seal the current hour's issue into DATA_DIR/issues/<issue>/ (or a past one with --issue)
 uv run laplace-engine issue --release releases/r1 --private PRIVATE_DIR --data DATA_DIR
 # check a published issue: rebuild it from its files, then check its commitment on-chain
@@ -57,7 +60,7 @@ scores so far, the key's runway. Independently of this machine, the Cloudflare W
 |---|---|
 | `record.py` | leaves and the Merkle tree, mirrored by `LaplaceLedger.leafHash` and `verifyForecast` |
 | `quantize.py` | rounding to basis points; exact integer pooling of rounded forecasts |
-| `release.py`, `freeze.py` | releases: forecasters identified by their source or pool specification; freezing a research run |
+| `release.py`, `freeze.py`, `fit.py` | releases: forecasters identified by their source or pool specification; freezing a research run; fitting new pools |
 | `baselines.py` | the baseline ladder as programs with frozen parameters |
 | `candles.py`, `issue.py` | an issue's candles, its forecasts, root and manifest |
 | `verify.py` | the reference verifier |
