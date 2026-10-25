@@ -394,13 +394,17 @@ def cmd_alert(args: argparse.Namespace) -> int:
 def cmd_digest(args: argparse.Namespace) -> int:
     """A daily summary: the last 24 hours of the record, the scores so far, and the commit key's runway."""
     newest = candles.current_issue()
-    window = range(newest - 23, newest + 1)
+    issues = args.data / "issues"
+    on_disk = [int(d.name) for d in issues.iterdir() if d.name.isdigit()] if issues.exists() else []
+    first = min((n for n in on_disk if (issues / str(n) / "commitment.json").exists()), default=newest)
+    window = range(max(newest - 23, first), newest + 1)  # hours before the record began are not gaps
     committed = [n for n in window if (issue_dir(args.data, n) / "commitment.json").exists()]
     published = [n for n in committed if (issue_dir(args.data, n) / publish.PUBLISHED).exists()]
     missing = [n for n in window if n not in committed]
     lines = [f"📊 Laplace · daily digest · {datetime.now(UTC):%Y-%m-%d %H:%M} UTC"]
     lines.append(
-        f"Record: {len(committed)}/24 hours committed, {len(published)} published (issues {window[0]} to {window[-1]})"
+        f"Record: {len(committed)}/{len(window)} hours committed, {len(published)} published "
+        f"(issues {window[0]} to {window[-1]})"
         + (f"; missing: {', '.join(map(str, missing))}" if missing else "; no gaps")
     )
     board = settle.scoreboard(settle.load_settlements(args.data / "issues"))

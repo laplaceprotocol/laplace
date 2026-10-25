@@ -198,7 +198,7 @@ def test_digest_counts_the_last_day_and_reports_scores(
     monkeypatch.delenv("LAPLACE_COMMIT_KEY_FILE", raising=False)
     assert cli.main(["digest", "--data", str(tmp_path / "data"), "--dry-run"]) == 0
     out = capsys.readouterr().out
-    assert "Record: 2/24 hours committed, 2 published" in out
+    assert "Record: 2/2 hours committed, 2 published" in out  # the record began two hours ago: no gaps
     assert "Demon vs GARCH: 1h +0.250 (n=1)" in out
     assert "Directions only" in out
 
