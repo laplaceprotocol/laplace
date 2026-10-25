@@ -139,7 +139,13 @@ def cmd_extend(args: argparse.Namespace) -> int:
     if "monkey" not in {p.name for p in programs}:
         programs = (*programs, release.Program("monkey", baselines.MONKEY, True, "baseline: equal odds on every bin"))
     if args.sense_baselines:
-        programs = (*programs, *fit.sense_baselines(args.run))
+        # A baseline the base release already has keeps its program, identity and record.
+        known = {p.name: p for p in programs}
+        for program in fit.sense_baselines(args.run):
+            if program.name not in known:
+                programs = (*programs, program)
+            elif program.source != known[program.name].source:
+                log.warning("%s: keeping %s's program; this run's fit differs", program.name, base.name)
     windows = fit.run_windows(args.run, programs, workers=args.workers)
     everyone = {p.name: windows.validation[p.name] for p in programs}
     plus = release.Pool(args.global_pool, fit.fit_weights(everyone, windows.realized_validation, HORIZONS))
@@ -165,11 +171,15 @@ def cmd_extend(args: argparse.Namespace) -> int:
 
     holdout = {p.name: windows.holdout[p.name] for p in programs}
     candidates = {pool.name: fit.mix(holdout, pool.weights_at) for pool in extended.pools}
+    # Programs new in this release are screened too, and against IV-HAR as well once the release has it.
+    added = [p.name for p in programs if p.name not in {q.name for q in base.programs} and p.name != "monkey"]
+    candidates |= {name: holdout[name] for name in added}
+    opponents = ("garch", "har", "iv-har") if "iv-har" in holdout else ("garch", "har")
     screening = {
         "run": args.run.name,
         "note": "holdout gains as development evidence (the holdout was inspected before; the live record is the test)",
         "weights": {pool.name: {str(h): dict(pool.weights_at(h)) for h in HORIZONS} for pool in extended.pools},
-        "holdout": fit.compare(windows, candidates),
+        "holdout": fit.compare(windows, candidates, opponents),
     }
     (args.out / "screening.json").write_text(json.dumps(screening, indent=1) + "\n")
     for name, by_opponent in screening["holdout"].items():
@@ -178,7 +188,7 @@ def cmd_extend(args: argparse.Namespace) -> int:
                 f"{scope} {r['mean']:+.4f} ({r['interval95'][0]:+.4f}..{r['interval95'][1]:+.4f})"
                 for scope, r in row.items()
             )
-            print(f"{name:10s} vs {opponent:5s}  {cells}")
+            print(f"{name:12s} vs {opponent:6s}  {cells}")
     for entry in extended.describe():
         print(f"{entry['name']:12s} {entry['kind']:8s} {entry['id']}")
     return 0
