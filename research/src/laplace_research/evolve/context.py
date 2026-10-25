@@ -5,7 +5,7 @@ Contexts are only ever built by ``history.HistoryReader``, whose buffer holds no
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 
 from laplace_research.evolve.feed import FloatArray, edges
@@ -38,6 +38,8 @@ class Context:
 
     Arrays hold the last ``LOOKBACK`` hourly candles, oldest first; the last element is the candle that has just
     closed. ``peers`` holds the same window for every feed asset (including this one), aligned hour by hour.
+    ``senses`` holds the asset's other data over the same hours (``evolve.senses``: ``dvol``, ``funding``, ``rv``;
+    NaN where unknown) and ``peer_senses`` the same for every asset; both are empty when the panel has no senses.
     """
 
     asset: str
@@ -52,9 +54,17 @@ class Context:
     volume: FloatArray
     peers: dict[str, Candles]
     lib: Lib
+    senses: dict[str, FloatArray] = field(default_factory=dict)
+    peer_senses: dict[str, dict[str, FloatArray]] = field(default_factory=dict)
 
 
-def make_context(peers: dict[str, Candles], asset: str, horizon: int, candle_open_ts: int) -> Context:
+def make_context(
+    peers: dict[str, Candles],
+    asset: str,
+    horizon: int,
+    candle_open_ts: int,
+    peer_senses: dict[str, dict[str, FloatArray]] | None = None,
+) -> Context:
     """Assemble a context for ``asset`` from per-asset windows ending with the candle that opened at
     ``candle_open_ts``."""
     closed_at = datetime.fromtimestamp(candle_open_ts + HOUR, UTC)
@@ -72,4 +82,6 @@ def make_context(peers: dict[str, Candles], asset: str, horizon: int, candle_ope
         volume=own.volume,
         peers=peers,
         lib=LIB,
+        senses=(peer_senses or {}).get(asset, {}),
+        peer_senses=peer_senses or {},
     )
