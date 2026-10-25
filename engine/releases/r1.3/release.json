@@ -1,6 +1,6 @@
 {
  "release": "r1.3",
- "notes": "r1.2's forecasters unchanged, plus shadow forecasters: the monkey (equal odds on every bin) and pools of all 16 programs fitted by EM on the validation window of evolve-senses1: demon-plus (one set of weights, left out if it fits to an existing pool's weights) and demon-h (its own weights at each horizon). Exploratory: no rule judges them until they get one.",
+ "notes": "r1.2's forecasters unchanged, plus shadow forecasters: ev-har, and pools of all 16 programs fitted by EM on the validation window of evolve-senses1: demon-plus-e (one set of weights, left out if it fits to an existing pool's weights) and demon-he (its own weights at each horizon). Exploratory: no rule judges them until they get one.",
  "forecasters": [
   {
    "name": "activity",

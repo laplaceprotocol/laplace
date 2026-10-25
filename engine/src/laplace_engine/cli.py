@@ -150,11 +150,12 @@ def cmd_extend(args: argparse.Namespace) -> int:
     everyone = {p.name: windows.validation[p.name] for p in programs}
     plus = release.Pool(args.global_pool, fit.fit_weights(everyone, windows.realized_validation, HORIZONS))
     by_horizon = tuple((h, fit.fit_weights(everyone, windows.realized_validation, (h,))) for h in HORIZONS)
+    added = [p.name for p in programs if p.name not in {q.name for q in base.programs}]
     notes = (
-        f"{base.name}'s forecasters unchanged, plus shadow forecasters: the monkey (equal odds on every bin) and "
+        f"{base.name}'s forecasters unchanged, plus shadow forecasters: {', '.join(added) or 'no new programs'}, and "
         f"pools of all {len(programs)} programs fitted by EM on the validation window of {args.run.name}: "
-        "demon-plus (one set of weights, left out if it fits to an existing pool's weights) and demon-h (its own "
-        "weights at each horizon). Exploratory: no rule judges them until they get one."
+        f"{args.global_pool} (one set of weights, left out if it fits to an existing pool's weights) and "
+        f"{args.horizon_pool} (its own weights at each horizon). Exploratory: no rule judges them until they get one."
     )
     # A fitted pool identical to an existing one (EM can land on the same weights) would duplicate its leaves.
     program_ids = {p.name: p.id for p in programs}
@@ -172,8 +173,7 @@ def cmd_extend(args: argparse.Namespace) -> int:
     holdout = {p.name: windows.holdout[p.name] for p in programs}
     candidates = {pool.name: fit.mix(holdout, pool.weights_at) for pool in extended.pools}
     # Programs new in this release are screened too, and against IV-HAR as well once the release has it.
-    added = [p.name for p in programs if p.name not in {q.name for q in base.programs} and p.name != "monkey"]
-    candidates |= {name: holdout[name] for name in added}
+    candidates |= {name: holdout[name] for name in added if name != "monkey"}
     opponents = ("garch", "har", "iv-har") if "iv-har" in holdout else ("garch", "har")
     screening = {
         "run": args.run.name,
