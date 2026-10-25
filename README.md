@@ -12,8 +12,8 @@ Laplace's demon is impossible: chaos, quantum uncertainty and the limits of comp
 demon. We measure how close evolution can get.
 
 ## Status
-**The hourly record is live** (since 2026-10-24 20:00 UTC). Every hour, 15 forecasters (eight evolved champions, the
-Demon, four classical baselines, and two shadow candidates: the monkey and a per-horizon Demon) answer 21 questions: the distribution of the 1-, 4- and 24-hour log return of BTC,
+**The hourly record is live** (since 2026-10-24 20:00 UTC). Every hour, 19 forecasters (eight evolved champions, the
+Demon, six classical baselines, the monkey, and three pools under test) answer 21 questions: the distribution of the 1-, 4- and 24-hour log return of BTC,
 ETH, SOL, XRP, DOGE, AVAX and LINK over ten bins. The hour's Merkle root is committed to
 [`LaplaceLedger`](docs/design/live-record.md#deployments) on Robinhood Chain within 15 minutes of the hour.
 

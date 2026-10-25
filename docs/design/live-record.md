@@ -92,6 +92,16 @@ pool of the same programs fitted to exactly the Demon's weights (EM gives the ba
 was left out: two forecasters with one identity would collide. The fit's holdout screening is kept with the release
 ([`screening.json`](../../engine/releases/r1.1/screening.json)).
 
+Release r1.2 (live from 2026-10-25) adds data beyond candles. Every issue now carries senses (Deribit implied
+volatility for BTC and ETH, 5-minute realized variance, perpetual funding), and two classical baselines use them:
+**RV-HAR** (HAR on 5-minute realized variance) and **IV-HAR** (plus the variance implied by DVOL; the other assets
+use BTC's index). Two more pools of every program include them: **demon-plus-s** (one set of weights) and
+**demon-hs** (weights per horizon; IV-HAR gets 17–19% at every horizon). r1.1's forecasters, identities and records
+are unchanged. On PoC 2's holdout IV-HAR nearly doubles HAR's gain at 1 hour but is weaker at 24 hours, RV-HAR adds
+nothing, and demon-hs is the best pool so far on the 1- and 4-hour questions (+0.0238 nats per question over GARCH,
+against the Demon's +0.0210): development evidence, kept in
+[`screening.json`](../../engine/releases/r1.2/screening.json).
+
 The baselines run as ordinary programs on the same 720-hour window, so their recursions start from the window
 rather than from the start of the research panel, and HAR's 720-hour mean covers the window's 719 returns. Rerun over
 the PoC 2 holdout (11,487 questions), the naive, EWMA and GARCH programs match the research baselines to within
