@@ -13,6 +13,7 @@ import json
 import logging
 import random
 import time
+from collections.abc import Sequence
 from dataclasses import asdict, dataclass
 from itertools import count
 from pathlib import Path
@@ -29,6 +30,7 @@ from laplace_engine.release import canonical, hex32
 
 CHAIN_ID = 4663
 RPC_URL = "https://rpc.mainnet.chain.robinhood.com"
+RPC_URLS = (RPC_URL, "https://robinhood.drpc.org")  # official first; a keyless public fallback
 LEDGER = "0x15AaE63A0EF391559153bCF9c56E5E2BE916b2BE"
 LEDGER_BLOCK = 96_984_063  # the ledger's deployment block; no commitment can be older
 COMMIT_WINDOW_S = 15 * 60
@@ -71,12 +73,20 @@ class LedgerRevert(RPCError):
 
 
 class RPC:
-    """A JSON-RPC client that retries transport errors, rate limits and server errors with backoff."""
+    """A JSON-RPC client over one or more endpoints. Transport errors, rate limits, server errors and endpoints that
+    stop serving a method move the call to the next endpoint, with backoff; any other error (a revert, "already
+    known") is the chain's answer and is raised as is."""
 
     RETRY_STATUS = frozenset({408, 429, 500, 502, 503, 504})
+    # Some endpoints report their rate limits as JSON-RPC errors; one reads "method does not exist" when throttling.
+    UNAVAILABLE = ("rate", "limit", "method does not exist", "temporarily", "unavailable", "timeout")
 
-    def __init__(self, url: str = RPC_URL, *, client: httpx.Client | None = None, attempts: int = 5) -> None:
-        self._url = url
+    def __init__(
+        self, urls: str | Sequence[str] = RPC_URLS, *, client: httpx.Client | None = None, attempts: int = 5
+    ) -> None:
+        self._urls = [urls] if isinstance(urls, str) else list(urls)
+        if not self._urls:
+            raise ValueError("at least one RPC endpoint is needed")
         self._client = client or httpx.Client(timeout=httpx.Timeout(20.0, connect=10.0))
         self._attempts = attempts
         self._ids = count(1)
@@ -84,8 +94,9 @@ class RPC:
     def call(self, method: str, *params: Any) -> Any:
         payload = {"jsonrpc": "2.0", "id": next(self._ids), "method": method, "params": list(params)}
         for attempt in range(1, self._attempts + 1):
+            url = self._urls[(attempt - 1) % len(self._urls)]
             try:
-                response = self._client.post(self._url, json=payload)
+                response = self._client.post(url, json=payload)
             except httpx.TransportError as exc:
                 if attempt == self._attempts:
                     raise RPCError(f"{method}: {exc!r}") from exc
@@ -95,8 +106,9 @@ class RPC:
                     error = body.get("error")
                     if error is None:
                         return body["result"]
-                    if "rate" not in str(error.get("message", "")).lower() or attempt == self._attempts:
-                        raise RPCError(f"{method}: {error.get('message')}", error.get("data"))
+                    message = str(error.get("message", ""))
+                    if not any(word in message.lower() for word in self.UNAVAILABLE) or attempt == self._attempts:
+                        raise RPCError(f"{method}: {message}", error.get("data"))
                 elif response.status_code not in self.RETRY_STATUS or attempt == self._attempts:
                     raise RPCError(f"{method}: HTTP {response.status_code}")
             time.sleep(min(8.0, 0.25 * 2**attempt) * (0.5 + random.random()))
@@ -153,6 +165,11 @@ class Ledger:
 
     def balance(self, address: str) -> int:
         return int(self._rpc.call("eth_getBalance", address, "latest"), 16)
+
+    def tx_cost(self, tx_hash: str) -> int:
+        """What a mined transaction cost in wei (gas used times the effective price, L1 data included)."""
+        receipt = self._rpc.call("eth_getTransactionReceipt", tx_hash)
+        return int(receipt["gasUsed"], 16) * int(receipt["effectiveGasPrice"], 16)
 
     def block_timestamp(self, number: int) -> int:
         return int(self._rpc.call("eth_getBlockByNumber", hex(number), False)["timestamp"], 16)
