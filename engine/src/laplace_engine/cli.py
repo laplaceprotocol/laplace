@@ -19,7 +19,7 @@ from typing import Any
 import httpx
 from eth_hash.auto import keccak
 
-from laplace_engine import candles, chain, files, issue, publish, release, settle, verify
+from laplace_engine import candles, chain, files, issue, notify, publish, release, settle, verify
 from laplace_research.data.candles import fetch_hourly
 from laplace_research.evolve.feed import HORIZONS, product
 
@@ -50,7 +50,7 @@ def build_parser() -> argparse.ArgumentParser:
     seal.add_argument("--commit", action="store_true", help="commit the root on-chain (key: LAPLACE_COMMIT_KEY_FILE)")
     seal.add_argument("--publish", action="store_true", help="publish committed issues (credentials: LAPLACE_R2_*)")
     seal.add_argument("--settle", action="store_true", help="settle and score every question that has become due")
-    seal.add_argument("--rpc", default=chain.RPC_URL)
+    seal.add_argument("--rpc", default=",".join(chain.RPC_URLS), help="RPC endpoints, comma-separated, tried in turn")
     seal.add_argument("--ledger", default=chain.LEDGER)
 
     check = sub.add_parser("verify", help="check an issue's files, and that they were committed in time")
@@ -58,12 +58,21 @@ def build_parser() -> argparse.ArgumentParser:
     check.add_argument("--data", type=Path, help="read the files from this data directory instead of the public URL")
     check.add_argument("--url", default=publish.PUBLIC_URL)
     check.add_argument("--offline", action="store_true", help="check the files only, not the chain")
-    check.add_argument("--rpc", default=chain.RPC_URL)
+    check.add_argument("--rpc", default=",".join(chain.RPC_URLS))
     check.add_argument("--ledger", default=chain.LEDGER)
 
     board = sub.add_parser("scoreboard", help="mean log scores and gains over the baselines, from settled questions")
     board.add_argument("--data", type=Path, required=True)
     board.add_argument("--horizon", type=int, choices=HORIZONS, help="gains at one horizon instead of overall")
+
+    alert = sub.add_parser("alert", help="report a crashed hourly run (systemd OnFailure)")
+    alert.add_argument("--unit", default="laplace-issue.service")
+
+    digest = sub.add_parser("digest", help="send the daily summary of the record")
+    digest.add_argument("--data", type=Path, required=True)
+    digest.add_argument("--rpc", default=",".join(chain.RPC_URLS))
+    digest.add_argument("--ledger", default=chain.LEDGER)
+    digest.add_argument("--dry-run", action="store_true", help="print the digest without sending it")
 
     status = sub.add_parser("status", help="recent issues: sealed, committed, published")
     status.add_argument("--data", type=Path, required=True)
@@ -105,13 +114,15 @@ def seal_issue(args: argparse.Namespace, number: int, target: Path) -> None:
 JOURNAL = "commit-tx.json"  # the signed commit transaction's hash, written before it is sent
 GAP = "gap.json"  # an issue whose window closed without a commitment
 CONFLICT = "conflict.json"  # an issue committed with a root other than its local files (never published)
+SOFT_FAILURE = 3  # the run finished but something needed attention, and the operator was alerted
+HOURS_6 = timedelta(hours=6)
 
 
-def commit_issue(ledger: chain.Ledger, number: int, target: Path) -> bool:
+def commit_issue(ledger: chain.Ledger, number: int, target: Path, alerts: notify.Alerts) -> bool:
     """Commit the issue, retrying transient failures until shortly before its window closes."""
     closes = candles.issue_time(number) + timedelta(seconds=chain.COMMIT_WINDOW_S)
     if (closes - datetime.now(UTC)).total_seconds() <= 30:
-        log.error("issue %d: the commit window closed at %s; it stays uncommitted", number, f"{closes:%H:%M:%S}")
+        alerts.add(f"issue {number} not committed: its window closed at {closes:%H:%M:%S} UTC before it was sealed")
         return False
     key_file = os.environ.get("LAPLACE_COMMIT_KEY_FILE")
     if not key_file:
@@ -119,10 +130,11 @@ def commit_issue(ledger: chain.Ledger, number: int, target: Path) -> bool:
     account = chain.load_account(Path(key_file))
     manifest = (target / "manifest.json").read_bytes()
     body = json.loads(manifest)
+    last_error = "no attempt"
     while True:
         remaining = (closes - datetime.now(UTC)).total_seconds()
         if remaining <= 30:
-            log.error("issue %d: the commit window closes at %s; it stays uncommitted", number, f"{closes:%H:%M:%S}")
+            alerts.add(f"issue {number} not committed before its window closed ({last_error[:200]})")
             return False
         try:
             commitment = ledger.commit(
@@ -139,10 +151,11 @@ def commit_issue(ledger: chain.Ledger, number: int, target: Path) -> bool:
             if exc.reason == "OutsideCommitWindow" and remaining > chain.COMMIT_WINDOW_S - 120:
                 time.sleep(5.0)
                 continue
-            log.error("issue %d: %s", number, exc)
+            alerts.add(f"issue {number} not committed: {exc}")
             return False
-        except Exception:
+        except Exception as exc:
             log.exception("issue %d: commit attempt failed; retrying", number)
+            last_error = f"{type(exc).__name__}: {exc}"
             time.sleep(min(15.0, max(remaining - 30, 1.0)))
             continue
         files.write_atomic(target / "commitment.json", commitment.to_json())
@@ -150,13 +163,15 @@ def commit_issue(ledger: chain.Ledger, number: int, target: Path) -> bool:
         try:
             balance = ledger.balance(account.address)
             if balance < chain.LOW_BALANCE_WEI:
-                log.warning("the commit key holds %.6f ETH; top it up", balance / 1e18)
+                alerts.add(
+                    f"the commit key holds {balance / 1e18:.6f} ETH; top it up", key="balance", every=timedelta(days=1)
+                )
         except Exception:
             log.exception("could not read the commit key's balance")
         return True
 
 
-def reconcile(ledger: chain.Ledger, issues_dir: Path, current: int) -> None:
+def reconcile(ledger: chain.Ledger, issues_dir: Path, current: int, alerts: notify.Alerts) -> None:
     """Resolve every sealed issue without a recorded commitment once its window has closed: a commitment that reached
     the chain without being recorded (a lost reply, a crash) is recovered; one that never did is marked as a gap."""
     if not issues_dir.exists():
@@ -174,16 +189,17 @@ def reconcile(ledger: chain.Ledger, issues_dir: Path, current: int) -> None:
             if onchain == root:
                 found = ledger.recover(number, root, manifest_hash, int(body["leaves"]), journal=issue_dir / JOURNAL)
                 files.write_atomic(issue_dir / "commitment.json", found.to_json())
-                log.warning("issue %d: recovered a commitment that had not been recorded (%s)", number, found.tx)
+                alerts.add(f"issue {number}: recovered a commitment that had not been recorded ({found.tx})")
             elif onchain == bytes(32):
                 files.write_atomic(issue_dir / GAP, release.canonical({"issue": number, "reason": "not committed"}))
-                log.warning("issue %d: never committed; marked as a gap", number)
+                alerts.add(f"issue {number} was never committed: a gap in the record")
             else:
                 record = {"issue": number, "local_root": body["root"], "onchain_root": "0x" + onchain.hex()}
                 files.write_atomic(issue_dir / CONFLICT, release.canonical(record))
-                log.error("issue %d: the committed root differs from the local files; not publishing it", number)
-        except Exception:
+                alerts.add(f"issue {number}: CONFLICT, the committed root differs from the local files; not published")
+        except Exception as exc:
             log.exception("issue %d: could not reconcile; will retry", number)
+            alerts.add(f"issue {number}: could not reconcile ({exc})"[:300], key=f"reconcile:{number}", every=HOURS_6)
 
 
 @contextmanager
@@ -211,28 +227,34 @@ def cmd_issue(args: argparse.Namespace) -> int:
 
 
 def run_issue(args: argparse.Namespace) -> int:
-    """Seal, commit, reconcile, publish, settle. Each step is isolated, so one failure never blocks the backlog."""
+    """Seal, commit, reconcile, publish, settle. Each step is isolated, so one failure never blocks the backlog; what
+    went wrong is sent to the operator in one message at the end."""
     number = args.issue if args.issue is not None else candles.current_issue()
     target = issue_dir(args.data, number)
     issues = args.data / "issues"
+    alerts = notify.Alerts(notify.Telegram.from_env(), args.data / "alerts.json")
     ok = True
     if (target / "manifest.json").exists():
         log.info("issue %d is already sealed", number)  # never reseal: what may be committed is on disk
     else:
         try:
             seal_issue(args, number, target)
-        except Exception:
+            for name, error in json.loads((target / "manifest.json").read_bytes())["failed"].items():
+                alerts.add(f"{name} produced no forecast: {error}"[:300], key=f"forecaster:{name}", every=HOURS_6)
+        except Exception as exc:
             log.exception("issue %d: sealing failed", number)
+            alerts.add(f"issue {number} could not be sealed: {type(exc).__name__}: {exc}"[:300])
             ok = False
     if args.commit:
-        ledger = chain.Ledger(chain.RPC(args.rpc), args.ledger)
+        ledger = chain.Ledger(chain.RPC(args.rpc.split(",")), args.ledger)
         if (target / "manifest.json").exists() and not (target / "commitment.json").exists():
             try:
-                ok = commit_issue(ledger, number, target) and ok
-            except Exception:
+                ok = commit_issue(ledger, number, target, alerts) and ok
+            except Exception as exc:
                 log.exception("issue %d: commit failed", number)
+                alerts.add(f"issue {number} not committed: {type(exc).__name__}: {exc}"[:300])
                 ok = False
-        reconcile(ledger, issues, candles.current_issue())
+        reconcile(ledger, issues, candles.current_issue(), alerts)
     store = None
     if args.publish:
         try:
@@ -240,21 +262,91 @@ def run_issue(args: argparse.Namespace) -> int:
             name = json.loads((args.release / release.RELEASE_FILE).read_text())["release"]
             publish.publish_release(store, args.release, name, args.data / "releases" / f"{name}.published")
             publish.publish_pending(store, issues)
-        except Exception:
+        except Exception as exc:
             log.exception("publishing failed; will retry next run")
+            alerts.add(f"publishing failed: {type(exc).__name__}: {exc}"[:300], key="publish", every=HOURS_6)
             ok = False
     if args.settle and issues.exists():
-        settled = settle.settle_due(issues, candles.current_issue(), coinbase_close(args.data / "candles"))
+        problems: list[tuple[str, str]] = []
+        settled = settle.settle_due(
+            issues, candles.current_issue(), coinbase_close(args.data / "candles"), problems=problems
+        )
+        for key, message in problems:
+            alerts.add(message[:300], key=key, every=timedelta(hours=12))
         if settled:
             log.info("settled %d question sets", len(settled))
         if store is not None:
             try:
                 if publish.publish_settlements(store, issues):
                     publish.publish_scoreboard(store, settle.scoreboard(settle.load_settlements(issues)))
-            except Exception:
+            except Exception as exc:
                 log.exception("publishing settlements failed; will retry next run")
+                alerts.add(f"publishing settlements failed: {exc}"[:300], key="publish-settlements", every=HOURS_6)
                 ok = False
-    return 0 if ok else 1
+    alerts.flush(f"⚠️ Laplace · issue {number} ({candles.issue_time(number):%Y-%m-%d %H:%M} UTC)")
+    return 0 if ok else SOFT_FAILURE
+
+
+def cmd_alert(args: argparse.Namespace) -> int:
+    """Called by systemd when the hourly unit fails (OnFailure=). A run that already reported its own problems exits
+    with SOFT_FAILURE and is not reported twice; anything else (a crash, a timeout, a kill) is."""
+    status = os.environ.get("MONITOR_EXIT_STATUS", "")
+    if status == str(SOFT_FAILURE):
+        return 0
+    result = os.environ.get("MONITOR_SERVICE_RESULT", "unknown")
+    telegram = notify.Telegram.from_env()
+    text = (
+        f"🚨 Laplace · the hourly run crashed (result: {result}, exit status: {status or 'none'}). "
+        f"The next run retries and reconciles automatically. Logs: journalctl --user -u {args.unit} -n 80"
+    )
+    print(text)
+    if telegram is not None:
+        telegram.send(text)
+    return 0
+
+
+def cmd_digest(args: argparse.Namespace) -> int:
+    """A daily summary: the last 24 hours of the record, the scores so far, and the commit key's runway."""
+    newest = candles.current_issue()
+    window = range(newest - 23, newest + 1)
+    committed = [n for n in window if (issue_dir(args.data, n) / "commitment.json").exists()]
+    published = [n for n in committed if (issue_dir(args.data, n) / publish.PUBLISHED).exists()]
+    missing = [n for n in window if n not in committed]
+    lines = [f"📊 Laplace · daily digest · {datetime.now(UTC):%Y-%m-%d %H:%M} UTC"]
+    lines.append(
+        f"Record: {len(committed)}/24 hours committed, {len(published)} published (issues {window[0]} to {window[-1]})"
+        + (f"; missing: {', '.join(map(str, missing))}" if missing else "; no gaps")
+    )
+    board = settle.scoreboard(settle.load_settlements(args.data / "issues"))
+    demons = [e for e in board["forecasters"].values() if e["name"] == "demon"]
+    if demons:
+        demon = max(demons, key=lambda e: e["questions"])
+        for base in ("garch", "har"):
+            by_h = demon["vs"].get(base, {}).get("by_horizon", {})
+            cells = [
+                f"{h}h {by_h[str(h)]['mean']:+.3f} (n={by_h[str(h)]['issues']})" for h in HORIZONS if str(h) in by_h
+            ]
+            lines.append(f"Demon vs {base.upper()}: " + (", ".join(cells) if cells else "nothing settled yet"))
+        if demon["vs"].get("garch", {}).get("interval95") is None:
+            lines.append(f"(Directions only: intervals appear after {2 * settle.BLOCK_ISSUES} fully settled issues.)")
+    try:
+        ledger = chain.Ledger(chain.RPC(args.rpc.split(",")), args.ledger)
+        key_file = os.environ.get("LAPLACE_COMMIT_KEY_FILE")
+        if key_file and committed:
+            account = chain.load_account(Path(key_file))
+            balance = ledger.balance(account.address)
+            last = chain.Commitment.from_json((issue_dir(args.data, committed[-1]) / "commitment.json").read_bytes())
+            cost = ledger.tx_cost(last.tx)
+            days = balance / cost / 24 if cost else float("inf")
+            lines.append(f"Commit key: {balance / 1e18:.5f} ETH ≈ {days:.0f} days at the last commit's cost")
+    except Exception as exc:
+        lines.append(f"Commit key: balance unavailable ({type(exc).__name__})")
+    text = "\n".join(lines)
+    print(text)
+    telegram = notify.Telegram.from_env()
+    if telegram is not None and not args.dry_run:
+        telegram.send(text)
+    return 0
 
 
 def coinbase_close(cache_dir: Path) -> settle.FetchClose:
@@ -297,7 +389,7 @@ def cmd_verify(args: argparse.Namespace) -> int:
     print(f"  root 0x{result.root.hex()}, manifest 0x{result.manifest_hash.hex()}")
     if args.offline:
         return 0
-    found = chain.Ledger(chain.RPC(args.rpc), args.ledger).find(args.issue)
+    found = chain.Ledger(chain.RPC(args.rpc.split(",")), args.ledger).find(args.issue)
     if found is None:
         print(f"issue {args.issue}: no commitment on-chain")
         return 1
@@ -364,6 +456,8 @@ def main(argv: list[str] | None = None) -> int:
         "verify": cmd_verify,
         "scoreboard": cmd_scoreboard,
         "status": cmd_status,
+        "alert": cmd_alert,
+        "digest": cmd_digest,
     }
     return commands[args.command](args)
 

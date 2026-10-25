@@ -29,12 +29,14 @@ units. The service reads its secrets from an environment file outside the reposi
 | `LAPLACE_COMMIT_KEY_FILE` | JSON file with the commit key (`privateKey`); the key only pays gas for `commit` |
 | `LAPLACE_R2_ENDPOINT`, `LAPLACE_R2_BUCKET` | the public bucket's S3 endpoint and name |
 | `LAPLACE_R2_ACCESS_KEY_ID`, `LAPLACE_R2_SECRET_ACCESS_KEY` | write access to that bucket |
+| `LAPLACE_TG_TOKEN`, `LAPLACE_TG_CHAT` | Telegram alerts and the daily digest (optional: without them, problems are only logged) |
 
 ```bash
 systemctl --user list-timers laplace-issue.timer    # next run
 journalctl --user -u laplace-issue -n 50            # last runs
 uv run laplace-engine status --data DATA_DIR        # sealed, committed, published, per hour
 uv run laplace-engine scoreboard --data DATA_DIR    # mean log scores and gains over the baselines
+uv run laplace-engine digest --data DATA_DIR --dry-run   # the daily digest, printed instead of sent
 ```
 
 Each run holds a lock, seals the issue (never resealing one that exists on disk), commits it while the window is
@@ -42,6 +44,14 @@ open (journaled, retried, and read back from the chain), reconciles older issues
 never recorded, marking real gaps), publishes every committed issue that is not yet public after checking it against
 its commitment, then settles every question that has become due and publishes the settlements and the scoreboard.
 Every step is isolated and retried on the next run; `status` shows gaps and conflicts.
+
+**Monitoring.** A run sends the operator one Telegram message listing whatever needed attention: an issue not sealed
+or not committed, a recovered commitment, a gap, a conflict, a forecaster that produced nothing, a question that could
+not be settled, a failed upload, a low key balance (repeats are throttled). If the run itself crashes, times out or is
+killed, `laplace-alert.service` (systemd `OnFailure=`) reports it; runs that already reported their problems exit with
+status 3 and are not reported twice. `laplace-digest.timer` sends a daily digest at 08:05 UTC: the last 24 hours, the
+scores so far, the key's runway. Independently of this machine, the Cloudflare Worker in
+[`../ops/watch`](../ops/watch) checks the public record every hour and alerts if the current hour is missing.
 
 | module | |
 |---|---|

@@ -16,9 +16,11 @@ git -C "$deploy" checkout --quiet --detach "$ref"
 
 units="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user"
 mkdir -p "$units"
-install -m 0644 "$deploy/engine/deploy/laplace-issue.service" "$deploy/engine/deploy/laplace-issue.timer" "$units/"
+for unit in laplace-issue.service laplace-issue.timer laplace-alert.service laplace-digest.service laplace-digest.timer; do
+  install -m 0644 "$deploy/engine/deploy/$unit" "$units/"
+done
 systemctl --user daemon-reload
-systemctl --user enable --quiet --now laplace-issue.timer
+systemctl --user enable --quiet --now laplace-issue.timer laplace-digest.timer
 
 echo "deployed $(git -C "$deploy" rev-parse --short HEAD)"
-systemctl --user list-timers laplace-issue.timer --no-pager
+systemctl --user list-timers "laplace-*" --no-pager

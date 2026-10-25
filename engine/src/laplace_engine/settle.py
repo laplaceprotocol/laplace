@@ -129,11 +129,14 @@ def _settling_prices(
     return {a: fetch_close(a, (due - 1) * 3600) for a in assets}, "coinbase"
 
 
-def settle_due(issues_dir: Path, current: int, fetch_close: FetchClose) -> list[Path]:
+def settle_due(
+    issues_dir: Path, current: int, fetch_close: FetchClose, *, problems: list[tuple[str, str]] | None = None
+) -> list[Path]:
     """Write every settlement that has become due for committed issues, however old.
 
     Issue N at horizon h is due once issue N + h has started. A question that cannot be settled now (the exchange is
-    unreachable, say) is logged and retried on the next run; it never blocks the others.
+    unreachable, say) is logged, reported in ``problems`` as (key, message), and retried on the next run; it never
+    blocks the others.
     """
     written = []
     dirs = sorted((d for d in issues_dir.iterdir() if d.name.isdigit()), key=lambda d: int(d.name))
@@ -157,8 +160,10 @@ def settle_due(issues_dir: Path, current: int, fetch_close: FetchClose) -> list[
                 forecasts = forecasts or json.loads((issue_dir / "forecasts.json").read_bytes())
                 write_atomic(target, settle(manifest, forecasts, h, *prices).to_json())
                 written.append(target)
-            except Exception:
+            except Exception as exc:
                 log.exception("issue %d: could not settle the %dh questions yet", issue, h)
+                if problems is not None:
+                    problems.append((f"settle:{issue}:{h}", f"issue {issue}: {h}h questions not settled yet ({exc})"))
     return written
 
 

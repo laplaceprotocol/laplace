@@ -1,0 +1,7 @@
+[Unit]
+Description=Laplace: report a crashed hourly run
+
+[Service]
+Type=oneshot
+EnvironmentFile=%h/laplace/secrets/engine.env
+ExecStart=%h/laplace/deploy/engine/.venv/bin/laplace-engine alert --unit laplace-issue.service
