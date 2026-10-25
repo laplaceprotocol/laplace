@@ -1,0 +1,338 @@
+{
+ "release": "r1.2",
+ "notes": "r1.1's forecasters unchanged, plus shadow forecasters: the monkey (equal odds on every bin) and pools of all 15 programs fitted by EM on the validation window of evolve-senses1: demon-plus (one set of weights, left out if it fits to an existing pool's weights) and demon-h (its own weights at each horizon). Exploratory: no rule judges them until they get one.",
+ "forecasters": [
+  {
+   "name": "activity",
+   "kind": "program",
+   "id": "0x24f51219b93b26d599e11a6a6f040186eb35847ce9504a69bc8c820b885c60e7",
+   "public": false,
+   "origin": "evolve-poc2#354"
+  },
+  {
+   "name": "clustering",
+   "kind": "program",
+   "id": "0x43a8f67754fec7c3761ba0d35a7a8570b458e64d9eb45a7b47c3207e0eb61d9c",
+   "public": false,
+   "origin": "evolve-poc2#369"
+  },
+  {
+   "name": "horizons",
+   "kind": "program",
+   "id": "0x56271ef4136c419c1a84a5300ec2d343918907d32bc90d6ccba0f6df68618465",
+   "public": false,
+   "origin": "evolve-poc2#339"
+  },
+  {
+   "name": "ranges",
+   "kind": "program",
+   "id": "0x25eb9899180b3e977d1b67d15e22ab8f551db88f04e3be670e71218003ca8f27",
+   "public": false,
+   "origin": "evolve-poc2#376"
+  },
+  {
+   "name": "regimes",
+   "kind": "program",
+   "id": "0xf428247d704cb5cb9f1ba96647c7bf618bc0e6d5a381851ae72932029951106a",
+   "public": false,
+   "origin": "evolve-poc2#378"
+  },
+  {
+   "name": "seasonality",
+   "kind": "program",
+   "id": "0xd37b0c9b063e63dab2b7a709738d8d50b7e20eb87d48e709802e0bf6168d259c",
+   "public": false,
+   "origin": "evolve-poc2#251"
+  },
+  {
+   "name": "spillover",
+   "kind": "program",
+   "id": "0x065f7dbef3d1b7554a8c8e2e5589d25eb3b093b43d00abdcd780b13d388b8f1c",
+   "public": false,
+   "origin": "evolve-poc2#398"
+  },
+  {
+   "name": "tails",
+   "kind": "program",
+   "id": "0x9537f9852094ca944299610c70f62400524fe01756842b9443ee55cd55ebd51e",
+   "public": false,
+   "origin": "evolve-poc2#249"
+  },
+  {
+   "name": "naive",
+   "kind": "program",
+   "id": "0x7bc1ba352b8e71e33fd4eb255caabee8e36647f38e39e98b83f0d9bf2f7b6150",
+   "public": true,
+   "origin": "baseline",
+   "path": "programs/naive.py"
+  },
+  {
+   "name": "ewma",
+   "kind": "program",
+   "id": "0x33e2a3b35aae00a1ce50e5495f2798d1cfa83f9dd4a16b4db0ce2e0ac4eeb568",
+   "public": true,
+   "origin": "baseline fitted on evolve-poc2's search window (2025-02-01 to 2026-06-01)",
+   "path": "programs/ewma.py"
+  },
+  {
+   "name": "garch",
+   "kind": "program",
+   "id": "0xdf33f0170700f1581334e893a7d08329d5a407c5b0e2913a2c4b9903c7fbe814",
+   "public": true,
+   "origin": "baseline fitted on evolve-poc2's search window (2025-02-01 to 2026-06-01)",
+   "path": "programs/garch.py"
+  },
+  {
+   "name": "har",
+   "kind": "program",
+   "id": "0x564e31cf84b39fb54ab6fe6e61213eaf70f7cccc792bde19321d357941662dc5",
+   "public": true,
+   "origin": "baseline fitted on evolve-poc2's search window (2025-02-01 to 2026-06-01)",
+   "path": "programs/har.py"
+  },
+  {
+   "name": "monkey",
+   "kind": "program",
+   "id": "0x9105a8f47732b7459fde1f9c58387445daf9327740f808e959a59c9a46f1abe1",
+   "public": true,
+   "origin": "baseline: equal odds on every bin",
+   "path": "programs/monkey.py"
+  },
+  {
+   "name": "rv-har",
+   "kind": "program",
+   "id": "0x9efc5ccee045b6577261efa184aac9854dc4e5b9d186da07598acb40f3c23c5a",
+   "public": true,
+   "origin": "baseline fitted on evolve-senses1's search window (2025-02-01 to 2026-06-01)",
+   "path": "programs/rv-har.py"
+  },
+  {
+   "name": "iv-har",
+   "kind": "program",
+   "id": "0xb8c73b5e819f1c1864d14e3d818cc6b3089aa65e7152cd8f3da39e9c30d7407f",
+   "public": true,
+   "origin": "baseline fitted on evolve-senses1's search window (2025-02-01 to 2026-06-01)",
+   "path": "programs/iv-har.py"
+  },
+  {
+   "name": "demon",
+   "kind": "pool",
+   "id": "0x97bc9657cb5b4af73b46e0031ac385cab039e72fb9fb8edf591bd457f149914e",
+   "spec": {
+    "kind": "linear-pool",
+    "members": [
+     {
+      "forecaster": "0xd37b0c9b063e63dab2b7a709738d8d50b7e20eb87d48e709802e0bf6168d259c",
+      "weight": 447582
+     },
+     {
+      "forecaster": "0x25eb9899180b3e977d1b67d15e22ab8f551db88f04e3be670e71218003ca8f27",
+      "weight": 245489
+     },
+     {
+      "forecaster": "0xf428247d704cb5cb9f1ba96647c7bf618bc0e6d5a381851ae72932029951106a",
+      "weight": 115323
+     },
+     {
+      "forecaster": "0x43a8f67754fec7c3761ba0d35a7a8570b458e64d9eb45a7b47c3207e0eb61d9c",
+      "weight": 108335
+     },
+     {
+      "forecaster": "0x065f7dbef3d1b7554a8c8e2e5589d25eb3b093b43d00abdcd780b13d388b8f1c",
+      "weight": 45229
+     },
+     {
+      "forecaster": "0x9537f9852094ca944299610c70f62400524fe01756842b9443ee55cd55ebd51e",
+      "weight": 38042
+     }
+    ],
+    "weight_scale": 1000000
+   }
+  },
+  {
+   "name": "demon-h",
+   "kind": "pool",
+   "id": "0x81ef07deb4abc0bf20298db83312852a3ddb95ca30723dfcdb2f7e0bb950eb6d",
+   "spec": {
+    "kind": "linear-pool-by-horizon",
+    "horizons": {
+     "1": [
+      {
+       "forecaster": "0x065f7dbef3d1b7554a8c8e2e5589d25eb3b093b43d00abdcd780b13d388b8f1c",
+       "weight": 334491
+      },
+      {
+       "forecaster": "0x43a8f67754fec7c3761ba0d35a7a8570b458e64d9eb45a7b47c3207e0eb61d9c",
+       "weight": 259036
+      },
+      {
+       "forecaster": "0xd37b0c9b063e63dab2b7a709738d8d50b7e20eb87d48e709802e0bf6168d259c",
+       "weight": 233143
+      },
+      {
+       "forecaster": "0x25eb9899180b3e977d1b67d15e22ab8f551db88f04e3be670e71218003ca8f27",
+       "weight": 173329
+      },
+      {
+       "forecaster": "0x56271ef4136c419c1a84a5300ec2d343918907d32bc90d6ccba0f6df68618465",
+       "weight": 1
+      }
+     ],
+     "4": [
+      {
+       "forecaster": "0xd37b0c9b063e63dab2b7a709738d8d50b7e20eb87d48e709802e0bf6168d259c",
+       "weight": 569886
+      },
+      {
+       "forecaster": "0x065f7dbef3d1b7554a8c8e2e5589d25eb3b093b43d00abdcd780b13d388b8f1c",
+       "weight": 188408
+      },
+      {
+       "forecaster": "0xf428247d704cb5cb9f1ba96647c7bf618bc0e6d5a381851ae72932029951106a",
+       "weight": 150808
+      },
+      {
+       "forecaster": "0x9537f9852094ca944299610c70f62400524fe01756842b9443ee55cd55ebd51e",
+       "weight": 86524
+      },
+      {
+       "forecaster": "0x9105a8f47732b7459fde1f9c58387445daf9327740f808e959a59c9a46f1abe1",
+       "weight": 4374
+      }
+     ],
+     "24": [
+      {
+       "forecaster": "0x25eb9899180b3e977d1b67d15e22ab8f551db88f04e3be670e71218003ca8f27",
+       "weight": 454116
+      },
+      {
+       "forecaster": "0xd37b0c9b063e63dab2b7a709738d8d50b7e20eb87d48e709802e0bf6168d259c",
+       "weight": 413109
+      },
+      {
+       "forecaster": "0x9537f9852094ca944299610c70f62400524fe01756842b9443ee55cd55ebd51e",
+       "weight": 76774
+      },
+      {
+       "forecaster": "0xdf33f0170700f1581334e893a7d08329d5a407c5b0e2913a2c4b9903c7fbe814",
+       "weight": 56001
+      }
+     ]
+    },
+    "weight_scale": 1000000
+   }
+  },
+  {
+   "name": "demon-plus-s",
+   "kind": "pool",
+   "id": "0x4dbc556479d6a9314d572ecac11eba87a8172b49dcb9e504c776b5f41563204d",
+   "spec": {
+    "kind": "linear-pool",
+    "members": [
+     {
+      "forecaster": "0xd37b0c9b063e63dab2b7a709738d8d50b7e20eb87d48e709802e0bf6168d259c",
+      "weight": 404296
+     },
+     {
+      "forecaster": "0x25eb9899180b3e977d1b67d15e22ab8f551db88f04e3be670e71218003ca8f27",
+      "weight": 260421
+     },
+     {
+      "forecaster": "0xb8c73b5e819f1c1864d14e3d818cc6b3089aa65e7152cd8f3da39e9c30d7407f",
+      "weight": 201766
+     },
+     {
+      "forecaster": "0x43a8f67754fec7c3761ba0d35a7a8570b458e64d9eb45a7b47c3207e0eb61d9c",
+      "weight": 70673
+     },
+     {
+      "forecaster": "0xf428247d704cb5cb9f1ba96647c7bf618bc0e6d5a381851ae72932029951106a",
+      "weight": 62771
+     },
+     {
+      "forecaster": "0x9537f9852094ca944299610c70f62400524fe01756842b9443ee55cd55ebd51e",
+      "weight": 73
+     }
+    ],
+    "weight_scale": 1000000
+   }
+  },
+  {
+   "name": "demon-hs",
+   "kind": "pool",
+   "id": "0x44edf726a3af4d23300f000178ce5cfdae1695c3fbb08dde86eff8faba57f410",
+   "spec": {
+    "kind": "linear-pool-by-horizon",
+    "horizons": {
+     "1": [
+      {
+       "forecaster": "0x43a8f67754fec7c3761ba0d35a7a8570b458e64d9eb45a7b47c3207e0eb61d9c",
+       "weight": 273029
+      },
+      {
+       "forecaster": "0x25eb9899180b3e977d1b67d15e22ab8f551db88f04e3be670e71218003ca8f27",
+       "weight": 201185
+      },
+      {
+       "forecaster": "0xd37b0c9b063e63dab2b7a709738d8d50b7e20eb87d48e709802e0bf6168d259c",
+       "weight": 190095
+      },
+      {
+       "forecaster": "0xb8c73b5e819f1c1864d14e3d818cc6b3089aa65e7152cd8f3da39e9c30d7407f",
+       "weight": 170337
+      },
+      {
+       "forecaster": "0x065f7dbef3d1b7554a8c8e2e5589d25eb3b093b43d00abdcd780b13d388b8f1c",
+       "weight": 165354
+      }
+     ],
+     "4": [
+      {
+       "forecaster": "0xd37b0c9b063e63dab2b7a709738d8d50b7e20eb87d48e709802e0bf6168d259c",
+       "weight": 528924
+      },
+      {
+       "forecaster": "0xb8c73b5e819f1c1864d14e3d818cc6b3089aa65e7152cd8f3da39e9c30d7407f",
+       "weight": 186890
+      },
+      {
+       "forecaster": "0xf428247d704cb5cb9f1ba96647c7bf618bc0e6d5a381851ae72932029951106a",
+       "weight": 150195
+      },
+      {
+       "forecaster": "0x9537f9852094ca944299610c70f62400524fe01756842b9443ee55cd55ebd51e",
+       "weight": 95610
+      },
+      {
+       "forecaster": "0x065f7dbef3d1b7554a8c8e2e5589d25eb3b093b43d00abdcd780b13d388b8f1c",
+       "weight": 38173
+      },
+      {
+       "forecaster": "0x9105a8f47732b7459fde1f9c58387445daf9327740f808e959a59c9a46f1abe1",
+       "weight": 208
+      }
+     ],
+     "24": [
+      {
+       "forecaster": "0x25eb9899180b3e977d1b67d15e22ab8f551db88f04e3be670e71218003ca8f27",
+       "weight": 391998
+      },
+      {
+       "forecaster": "0xd37b0c9b063e63dab2b7a709738d8d50b7e20eb87d48e709802e0bf6168d259c",
+       "weight": 380084
+      },
+      {
+       "forecaster": "0xb8c73b5e819f1c1864d14e3d818cc6b3089aa65e7152cd8f3da39e9c30d7407f",
+       "weight": 180704
+      },
+      {
+       "forecaster": "0x9537f9852094ca944299610c70f62400524fe01756842b9443ee55cd55ebd51e",
+       "weight": 47214
+      }
+     ]
+    },
+    "weight_scale": 1000000
+   }
+  }
+ ]
+}
