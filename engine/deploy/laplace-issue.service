@@ -3,11 +3,13 @@ Description=Laplace: seal, commit and publish the hourly issue
 Documentation=https://github.com/laplaceprotocol/laplace/blob/main/docs/design/live-record.md
 After=network-online.target
 Wants=network-online.target
+# A crash, a timeout or a kill is reported here; a run that finished reports its own problems.
+OnFailure=laplace-alert.service
 
 [Service]
 Type=oneshot
 WorkingDirectory=%h/laplace/deploy/engine
-# LAPLACE_COMMIT_KEY_FILE and LAPLACE_R2_* (see engine/README.md); never part of the repository.
+# LAPLACE_COMMIT_KEY_FILE, LAPLACE_R2_* and LAPLACE_TG_* (see engine/README.md); never part of the repository.
 EnvironmentFile=%h/laplace/secrets/engine.env
 ExecStart=%h/laplace/deploy/engine/.venv/bin/laplace-engine issue --release releases/r1 --private %h/laplace/private/r1 --data %h/laplace/live --commit --publish --settle
 # The commit window closes 15 minutes after the hour; nothing useful can happen later.

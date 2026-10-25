@@ -16,6 +16,8 @@ from laplace_research.evolve.panel import Panel, build
 
 WINDOW_HOURS = LOOKBACK + 24  # a day of spare history beyond what programs see
 SENTINEL = "BTC"  # trades every second; its first candle of the issue hour shows the previous hour has closed
+GRACE = timedelta(minutes=5)  # after this, the exchange's own clock vouches for the hour if its candle feed lags
+EXCHANGE_TIME = "https://api.exchange.coinbase.com/time"
 
 log = logging.getLogger(__name__)
 
@@ -41,13 +43,26 @@ def hour_started(issue: int, cache_dir: Path) -> bool:
     return any(c.ts == issue * HOUR for c in rows)
 
 
-def fetch(issue: int, cache_dir: Path) -> Panel:
-    """The ``WINDOW_HOURS`` hours before the issue, ending with the candle that closed at the issue time. For the
-    current issue, the exchange must also have opened the issue hour, so a fast local clock can never seal on a candle
-    that is still trading."""
+def exchange_time() -> datetime:
+    """The exchange's own clock."""
+    with httpx.Client(timeout=15.0, headers={"User-Agent": "laplace-engine"}) as client:
+        response = client.get(EXCHANGE_TIME)
+        response.raise_for_status()
+        return datetime.fromtimestamp(float(response.json()["epoch"]), UTC)
+
+
+def fetch(issue: int, cache_dir: Path, *, now: datetime | None = None) -> Panel:
+    """The ``WINDOW_HOURS`` hours before the issue, ending with the candle that closed at the issue time.
+
+    For the current issue the exchange must also vouch that the issue hour has begun, so a fast local clock can never
+    seal on a candle that is still trading: normally by having opened the hour's first candle; if its candle feed
+    lags past ``GRACE``, by its own clock. The committed last candle is then the definitive starting price.
+    """
     end = issue_time(issue)
-    if issue >= current_issue() and not hour_started(issue, cache_dir):
-        raise CandlesNotReady("the exchange has not opened the issue hour yet")
+    if issue >= current_issue(now) and not hour_started(issue, cache_dir):
+        if (now or datetime.now(UTC)) < end + GRACE or exchange_time() < end + timedelta(seconds=30):
+            raise CandlesNotReady("the exchange has not opened the issue hour yet")
+        log.warning("issue %d: the exchange's new-hour candle is late; its clock says the hour has closed", issue)
     panel = build(end - timedelta(hours=WINDOW_HOURS), end, cache_dir)
     if len(panel.ts) < LOOKBACK:
         raise CandlesNotReady(f"only {len(panel.ts)} shared hours before issue {issue}")

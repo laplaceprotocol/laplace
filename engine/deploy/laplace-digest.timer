@@ -1,0 +1,9 @@
+[Unit]
+Description=Laplace: the daily digest, after the 08:00 issue
+
+[Timer]
+OnCalendar=*-*-* 08:05:00 UTC
+AccuracySec=1min
+
+[Install]
+WantedBy=timers.target

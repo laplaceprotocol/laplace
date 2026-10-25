@@ -8,7 +8,7 @@ import pytest
 from eth_account import Account
 from eth_hash.auto import keccak
 
-from laplace_engine import candles, chain, cli, publish, release, settle
+from laplace_engine import candles, chain, cli, notify, publish, release, settle
 from laplace_engine.baselines import NAIVE
 from laplace_engine.chain import RPC
 from laplace_engine.release import Pool, Program, Release
@@ -85,7 +85,7 @@ def test_a_closed_window_leaves_the_issue_uncommitted(
     monkeypatch.setattr(candles, "wait_for", lambda issue, cache_dir, deadline: make_panel(end_issue=issue))
     argv = ["issue", "--release", str(tmp_path / "r9"), "--private", str(tmp_path / "private")]
     argv += ["--data", str(tmp_path / "data"), "--issue", str(ISSUE), "--workers", "1", "--commit"]
-    assert cli.main(argv) == 1
+    assert cli.main(argv) == cli.SOFT_FAILURE
     assert not (tmp_path / "data" / "issues" / str(ISSUE) / "commitment.json").exists()
 
 
@@ -123,8 +123,13 @@ def test_reconcile_recovers_an_unrecorded_commitment_and_marks_gaps(
     monkeypatch.setenv("LAPLACE_COMMIT_KEY_FILE", str(tmp_path / "unused.json"))
     node.advance(number * 3600 + 60)  # the current issue's commit lands inside its own window
 
+    inbox = Inbox()
+    monkeypatch.setattr(notify.Telegram, "from_env", classmethod(lambda cls: inbox))
     assert cli.main([*base, "--commit", "--publish"]) == 0
     assert json.loads((orphan / "commitment.json").read_bytes())["root"] == body["root"]
+    (message,) = inbox.messages  # one message for the whole run
+    assert f"issue {number - 2}: recovered a commitment" in message
+    assert f"issue {number - 1} was never committed" in message
     assert f"v1/issues/{number - 2}/forecasts.json" in store.objects  # recovered, so published
     gap = tmp_path / "data" / "issues" / str(number - 1)
     assert (gap / cli.GAP).exists()  # never committed: a visible gap, never published
@@ -156,3 +161,43 @@ def test_scoreboard_reads_before_any_issue_has_settled_at_every_horizon(
     assert cli.main(["scoreboard", *data, "--horizon", "1"]) == 0
     demon = next(line for line in capsys.readouterr().out.splitlines() if line.startswith("demon"))
     assert demon.split()[-3] == "+0.5000"
+
+
+class Inbox:
+    def __init__(self) -> None:
+        self.messages: list[str] = []
+
+    def send(self, text: str) -> None:
+        self.messages.append(text)
+
+
+def test_crash_alerts_skip_runs_that_already_reported(monkeypatch: pytest.MonkeyPatch) -> None:
+    inbox = Inbox()
+    monkeypatch.setattr(notify.Telegram, "from_env", classmethod(lambda cls: inbox))
+    monkeypatch.setenv("MONITOR_EXIT_STATUS", str(cli.SOFT_FAILURE))
+    assert cli.main(["alert"]) == 0
+    assert inbox.messages == []
+    monkeypatch.setenv("MONITOR_EXIT_STATUS", "1")
+    monkeypatch.setenv("MONITOR_SERVICE_RESULT", "exit-code")
+    assert cli.main(["alert"]) == 0
+    assert "crashed (result: exit-code, exit status: 1)" in inbox.messages[0]
+
+
+def test_digest_counts_the_last_day_and_reports_scores(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    number = candles.current_issue()
+    for n in (number - 1, number):
+        d = tmp_path / "data" / "issues" / str(n)
+        d.mkdir(parents=True)
+        (d / "commitment.json").write_text("{}")
+        (d / "published").touch()
+    scores = {"demon": {"BTC": -1.0}, "garch": {"BTC": -1.25}}
+    s = settle.Settlement(number - 1, 1, "issue x", {"BTC": 1.0}, {"BTC": 1.0}, {"BTC": 5}, scores, "r1", {})
+    (tmp_path / "data" / "issues" / str(number - 1) / settle.settlement_name(1)).write_bytes(s.to_json())
+    monkeypatch.delenv("LAPLACE_COMMIT_KEY_FILE", raising=False)
+    assert cli.main(["digest", "--data", str(tmp_path / "data"), "--dry-run"]) == 0
+    out = capsys.readouterr().out
+    assert "Record: 2/24 hours committed, 2 published" in out
+    assert "Demon vs GARCH: 1h +0.250 (n=1)" in out
+    assert "Directions only" in out

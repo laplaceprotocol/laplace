@@ -74,7 +74,24 @@ def test_the_current_issue_waits_until_the_exchange_opens_its_hour(
     monkeypatch.setattr(candles, "current_issue", lambda now=None: ISSUE)
     monkeypatch.setattr(candles, "build", lambda start, end, cache_dir: make_panel(end_issue=ISSUE))
     monkeypatch.setattr(candles, "hour_started", lambda issue, cache_dir: False)
+    monkeypatch.setattr(candles, "exchange_time", lambda: pytest.fail("inside the grace period: no clock check"))
+    early = candles.issue_time(ISSUE) + timedelta(seconds=40)
     with pytest.raises(candles.CandlesNotReady, match="not opened"):
-        candles.fetch(ISSUE, tmp_path)
+        candles.fetch(ISSUE, tmp_path, now=early)
     monkeypatch.setattr(candles, "hour_started", lambda issue, cache_dir: True)
-    assert int(candles.fetch(ISSUE, tmp_path).ts[-1]) == (ISSUE - 1) * 3600
+    assert int(candles.fetch(ISSUE, tmp_path, now=early).ts[-1]) == (ISSUE - 1) * 3600
+
+
+def test_a_lagging_candle_feed_falls_back_to_the_exchange_clock_after_the_grace(
+    monkeypatch: pytest.MonkeyPatch, make_panel: Callable[..., Panel], tmp_path: Path
+) -> None:
+    monkeypatch.setattr(candles, "build", lambda start, end, cache_dir: make_panel(end_issue=ISSUE))
+    monkeypatch.setattr(candles, "hour_started", lambda issue, cache_dir: False)
+    start = candles.issue_time(ISSUE)
+    monkeypatch.setattr(candles, "exchange_time", lambda: start + timedelta(minutes=6))
+    with pytest.raises(candles.CandlesNotReady):  # inside the grace period, keep waiting for the candle
+        candles.fetch(ISSUE, tmp_path, now=start + timedelta(minutes=2))
+    assert int(candles.fetch(ISSUE, tmp_path, now=start + timedelta(minutes=6)).ts[-1]) == (ISSUE - 1) * 3600
+    monkeypatch.setattr(candles, "exchange_time", lambda: start - timedelta(seconds=5))
+    with pytest.raises(candles.CandlesNotReady):  # our clock is fast: the exchange says the hour has not begun
+        candles.fetch(ISSUE, tmp_path, now=start + timedelta(minutes=6))

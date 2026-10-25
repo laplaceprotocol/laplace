@@ -129,3 +129,30 @@ def test_block_at_is_the_last_block_at_or_before_a_time() -> None:
     t = node.timestamps[LEDGER_BLOCK + 1_234]
     assert ledger.block_at(t) == LEDGER_BLOCK + 1_234
     assert ledger.block_at(10**12) == node.head
+
+
+def test_rpc_moves_to_the_next_endpoint_when_one_throttles_or_fails() -> None:
+    node, _, _ = setup()
+    served = []
+
+    def route(request: httpx.Request) -> httpx.Response:
+        served.append(request.url.host)
+        if request.url.host == "down.test":
+            return httpx.Response(503)
+        if request.url.host == "throttled.test":  # a throttled endpoint that says so in a JSON-RPC error
+            return httpx.Response(200, json={"jsonrpc": "2.0", "id": 1, "error": {"message": "method does not exist"}})
+        return node.handle(request)
+
+    client = httpx.Client(transport=httpx.MockTransport(route))
+    ledger = Ledger(RPC(["https://down.test", "https://throttled.test", "https://up.test"], client=client))
+    assert ledger.root_of(ISSUE) == bytes(32)
+    assert served == ["down.test", "throttled.test", "up.test"]
+
+
+def test_a_revert_is_the_chain_s_answer_and_is_not_retried_elsewhere(tmp_path: Path) -> None:
+    node, ledger, account = setup()
+    node.revert = "0x" + selector("NotCommitter()").hex()
+    before = node.requests
+    with pytest.raises(LedgerRevert):
+        ledger.commit(account, ISSUE, ROOT, MANIFEST, 273, journal=tmp_path / "tx.json")
+    assert node.requests - before == 3  # rootOf, committer, then estimateGas once: nothing is resent
