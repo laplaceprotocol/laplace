@@ -18,8 +18,11 @@ def test_a_release_that_moves_prices_shows_in_the_study(panel: Panel) -> None:
     moved = Panel(panel.assets, panel.ts, panel.open, panel.high, panel.low, close, panel.volume)
     study = event_study(moved, calendar)
     assert study["cpi"]["n"] == 2  # 2025-01-15 and 2025-02-12 fall inside the synthetic panel
-    assert min(study["cpi"]["event_hour"]) > 5
-    assert 0.3 < np.mean(study["nfp"]["event_hour"]) < 3  # untouched releases look like any other hour
+    cpi = study["cpi"]["by_offset"]
+    assert min(cpi["0"]["per_asset"]) > 5
+    assert cpi["0"]["interval95"][0] <= cpi["0"]["ratio"] <= cpi["0"]["interval95"][1]
+    assert cpi["1"]["ratio"] < 3  # the jump stays in its own candle
+    assert 0.2 < study["nfp"]["by_offset"]["0"]["ratio"] < 4  # untouched releases look like any other hour
     assert "| cpi | 2 |" in render(study)
 
 
@@ -39,7 +42,8 @@ def test_the_overlay_screen_scores_every_hour_of_validation_and_holdout(panel: P
         seed=0,
     )
     screen = overlay_screen(sensed, config, events.load())
-    assert screen["hours"] == 17 * 24  # every hour from 2025-02-01 to 2025-02-18
+    assert screen["hours"] == 17 * 24 - 24  # every hour from 2025-02-01 whose labels settle before 2025-02-18
+    assert len(screen["one_hour_gain_by_utc_hour"]) == 24
     for row in screen["ev_har_vs_iv_har"].values():
         assert row["interval95"][0] <= row["mean"] <= row["interval95"][1]
     assert "| us-session |" in render_screen(screen)
