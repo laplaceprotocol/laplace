@@ -15,28 +15,32 @@ knowing them worth under our score?
   Eastern and are converted with daylight saving.
 
 ## How much events move volatility
-Reproduce with `laplace-research evolve events --run-id senses1`. Each ratio is a mean squared hourly log return.
-- **Event hour:** the candle that contains the event, against weekday candles at the same UTC hours that contain no
-  event of that kind, as a range over the seven assets.
-- **Hours before and after:** against all hours, as a mean over assets.
+Reproduce with `laplace-research evolve events --run-id senses1`. Each cell compares candles at one offset from an
+event (the candle that contains it, the one before, the three after) with weekday candles at the same UTC hours that
+are not at that offset from such an event; for releases, days with any release are left out of the comparison.
+Matching the UTC hour matters: hours near the US session are busier anyway, so comparing with all hours would credit
+the clock to the event. Ratios are of mean squared hourly log returns, per asset and then averaged over assets, with
+95% intervals from resampling the events.
 
-| event | n | event hour (range over assets) | hour before | next hours |
-|---|---|---|---|---|
-| FOMC | 14 | 1.43x to 2.39x | 1.01x | 2.05x, 0.82x, 0.49x |
-| CPI | 21 | 2.05x to 5.19x | 0.37x | 2.26x, 2.11x, 2.64x |
-| jobs report | 21 | 1.24x to 1.79x | 0.28x | 1.99x, 3.10x, 2.35x |
-| US open | 454 | 1.46x to 2.56x | 1.18x | 2.67x, 1.86x, 1.24x |
+| event | n | hour before | event hour | +1 h | +2 h | +3 h |
+|---|---|---|---|---|---|---|
+| FOMC | 14 | 0.73x (0.44 to 1.16) | 1.96x (0.90 to 3.25) | 1.93x (0.81 to 3.36) | 0.85x (0.34 to 1.66) | 0.47x (0.29 to 0.69) |
+| CPI | 21 | 0.45x (0.20 to 0.85) | 3.60x (1.61 to 6.27) | 1.17x (0.48 to 2.13) | 0.90x (0.52 to 1.33) | 1.42x (0.61 to 2.71) |
+| jobs report | 21 | 0.34x (0.16 to 0.59) | 1.71x (0.77 to 3.00) | 1.01x (0.61 to 1.50) | 1.30x (0.73 to 2.09) | 1.31x (0.39 to 2.58) |
+| US open | 454 | 0.84x (0.69 to 1.02) | 1.05x (0.86 to 1.26) | 1.36x (1.13 to 1.63) | 1.06x (0.89 to 1.24) | 0.73x (0.62 to 0.86) |
 
-- **CPI** moves crypto the most. In the release hour, variance is 2 to 5 times that of the same hour on other
-  weekdays, and it stays at about twice the average for the next three hours. The hour before is unusually quiet
-  (0.37 times the average): the market waits.
-- **The jobs report** moves less in its own hour, more in the next three (2 to 3 times), and its hour before is the
-  quietest of all.
-- **FOMC statements** (2:00 p.m. ET; the press conference follows at 2:30) double variance for two hours, then
-  calm falls below average.
-- **The US open** raises its hour by 1.5 to 2.6 times over other weekday hours, and the next hour runs 2.7 times the
-  average. A program that sees only the UTC hour cannot place the open, which moves between 13:30 and 14:30 UTC with
-  daylight saving, nor any release.
+- **CPI** moves crypto the most. Its release hour carries 3.6 times the variance of the same hour on other weekdays,
+  every asset more than twice (2.3x to 5.1x). The hour before is quiet (0.45x), and after the release hour nothing
+  is clearly different from an ordinary hour.
+- **The jobs report** moves less (1.7x, the interval reaches below 1), and the hour before it is the quietest of
+  all (0.34x).
+- **FOMC statements** (2:00 p.m. ET; the press conference follows at 2:30) about double variance for two hours,
+  though with fourteen decisions both intervals reach below 1; by the third hour, variance falls below the usual
+  (0.47x).
+- **The US open** is harder to read this way: the same UTC hour falls in another phase of the session in the other
+  half of the year, so its row compares session phases rather than session against no session. The first full hour
+  of the session runs 1.36 times the same UTC hour in the other season. That shift, one hour twice a year, is what a
+  program that sees only the UTC hour cannot place.
 
 Programs now see these events as `ctx.events`: every event from 24 hours before to 48 hours after the forecast time,
 as (hours, kind). That is when each event is scheduled, never what it announces. Every issue records the events its
@@ -54,14 +58,14 @@ pooled, at the maximum of the binned log score under a Gaussian prior (sd 1 in l
 to the number of questions); tails are then chosen again. The frozen program computes exactly the research inputs
 (tested to 1e-12).
 
-Fitted effects on variance (`exp(β)`, per unit of input) for the inputs that do not depend on the clock alone:
+Fitted effects on variance (`exp(β)`, per unit of input) for the inputs other than the UTC hour:
 
 | input | 1h | 4h | 24h |
 |---|---|---|---|
 | weekend (whole window) | 0.67x | 0.63x | 0.66x |
 | release inside the window | 2.40x | 1.00x | 0.85x |
-| release in the 3 hours before | 1.11x | 1.21x | 1.12x |
-| release in the 2 hours after | 0.69x | 0.70x | 0.74x |
+| release in the 3 hours before the window | 1.11x | 1.21x | 1.12x |
+| release in the 2 hours after the window | 0.69x | 0.70x | 0.74x |
 | NYSE open inside the window | 1.32x | 1.40x | 1.41x |
 | session (whole window) | 1.31x | 1.23x | 0.64x |
 
@@ -69,13 +73,13 @@ At 24 hours the weekend, open and session inputs are nearly collinear: a weekday
 hours of session. Read them together there.
 
 ### Gains
-**Every hour of validation and holdout** (2026-06-01 to 2026-10-23, 3,463 forecast hours × 7 assets). Gain over
+**Every hour of validation and holdout** (2026-06-01 to 2026-10-23, 3,464 forecast hours × 7 assets). Gain over
 IV-HAR in nats per question, 95% intervals from a circular block bootstrap over 72-hour blocks
 (`laplace-research evolve events`):
 
 | 1h | 4h | 24h | 1h + 4h | all |
 |---|---|---|---|---|
-| +0.0135 (+0.0068 to +0.0201) | +0.0193 (+0.0094 to +0.0287) | +0.0186 (+0.0072 to +0.0302) | +0.0164 (+0.0089 to +0.0237) | +0.0171 (+0.0101 to +0.0241) |
+| +0.0135 (+0.0068 to +0.0201) | +0.0193 (+0.0097 to +0.0289) | +0.0186 (+0.0077 to +0.0304) | +0.0164 (+0.0089 to +0.0241) | +0.0171 (+0.0101 to +0.0246) |
 
 **The PoC 2 holdout** (2026-08-16 to 2026-10-24, every third hour), from release r1.3's screening
 ([`screening.json`](../../engine/releases/r1.3/screening.json)), 1- and 4-hour questions pooled:
@@ -86,10 +90,12 @@ IV-HAR in nats per question, 95% intervals from a circular block bootstrap over 
 | the Demon (r1) | +0.0210 (+0.0087 to +0.0335) | +0.0116 (+0.0013 to +0.0232) |
 | demon-he (every program, weights per horizon) | +0.0276 (+0.0139 to +0.0420) | +0.0183 (+0.0078 to +0.0286) |
 
-EV-HAR's 1-hour gain over IV-HAR is +0.0011 on this holdout but +0.0135 on every hour. The holdout samples every
-third hour, and 3 divides 24, so its 1-hour questions only ever start at 00, 03, …, 21 UTC. The windows that start
-at 13:00 and 14:00 UTC, where the open and the releases fall, are never scored at 1 hour. The search (every 23
-hours) and validation (every 5) windows rotate through the clock; future holdouts should too.
+EV-HAR's 1-hour gain over IV-HAR is +0.0011 on this holdout but +0.0135 on every hour. On every hour, the 1-hour
+gain sits in the windows that start at 12:00 to 15:00 UTC (+0.03, +0.09, +0.13 and +0.07 nats): the releases at
+12:30 and the session's first hours, in daylight saving time. The holdout samples every third hour from 01:00, and 3
+divides 24, so its 1-hour questions only ever start at 01, 04, …, 22 UTC: of those four windows it scores only the
+one at 13:00. The search (every 23 hours) and validation (every 5) windows rotate through the clock; future holdouts
+should too.
 
 What this means:
 - A classical model given the same information gets most of the way. EV-HAR alone holds almost nine-tenths of the
