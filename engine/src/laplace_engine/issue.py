@@ -8,6 +8,7 @@ leaf, so anyone can rebuild the tree (see ``verify``).
 from __future__ import annotations
 
 import subprocess
+from collections.abc import Sequence
 from concurrent.futures.process import BrokenProcessPool
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -158,7 +159,10 @@ def seal(
     *,
     ledger: Ledger,
     commit: str | None,
+    judging: Sequence[dict[str, str]] = (),
 ) -> Sealed:
+    """Build an issue's leaves, root, manifest and forecasts file. ``judging`` lists the pre-registered rules in force
+    (path and keccak256), which the manifest carries so that the chain dates them."""
     if panel.assets != ASSETS:
         raise ValueError("the panel's assets must be the feed's registry, in order")
     bps, pool_failures = basis_points(release, finals)
@@ -189,6 +193,7 @@ def seal(
             },
             "inputs": inputs(panel),
             "forecasters": release.describe(),
+            "judging": list(judging),
             "failed": failures,
             "leaf": LEAF_ENCODING,
             "leaves": len(entries),

@@ -57,6 +57,10 @@ follow from committed files alone, and anyone can recompute them. If issue N + h
 settles on the exchange's public candle instead, so a missing hour can never hide an outcome; the settlement file
 names its source either way. The committed prices themselves can be checked against the exchange's public candles.
 
+Release r1 is judged by [a pre-registered rule](../judging/r1.md): the Demon against GARCH and HAR on the 1- and
+4-hour questions, with looks at 90, 180 and 365 days; the scoreboard shows its statistic as "running, unresolved"
+between looks.
+
 The scoreboard lists each forecaster's mean log score (overall and by horizon) and its paired gain over the naive,
 GARCH and HAR baselines on the questions both answered, issues weighted equally, with a 95% circular block-bootstrap
 interval over issues (72-hour blocks). Until two blocks of issues have settled it shows no interval at all: a few days
@@ -95,7 +99,9 @@ implementations identical.
 **Manifest** (canonical JSON: sorted keys, no whitespace, ASCII; its keccak256 is committed): the issue and its time,
 the ledger, the engine version and git commit, the release, the feed definition, the inputs (the hash of the 720
 candles the programs saw, as little-endian float64 ordered hour, asset, field, and the last candle of every asset in
-full), the forecasters with their identities, any failures, the leaf encoding, the number of leaves and the root.
+full), the forecasters with their identities, any failures, the pre-registered judging rules in force (each one's
+path and keccak256, so the chain dates the rule before the results it judges), the leaf encoding, the number of leaves
+and the root.
 
 **Forecasts:** every leaf as `{forecaster, asset, horizon, bps}`, plus the issue, the root and the manifest's hash.
 

@@ -139,3 +139,23 @@ def test_load_settlements_reads_every_file(tmp_path: Path) -> None:
         write_issue(tmp_path, issue, 100.0)
     settle_due(tmp_path, 102, lambda asset, t: 100.0)
     assert {(s.issue, s.horizon) for s in load_settlements(tmp_path)} == {(100, 1), (101, 1)}
+
+
+def test_the_primary_statistic_needs_both_horizons_for_every_asset() -> None:
+    rng = np.random.default_rng(1)
+    settlements = []
+    for issue in range(5_000, 5_000 + 2 * BLOCK_ISSUES + 10):
+        for h in (1, 4, 24):
+            base = {a: float(rng.normal(-2.0, 0.4)) for a in ASSETS}
+            demon = {a: base[a] + 0.05 + float(rng.normal(0, 0.1)) for a in ASSETS}
+            if issue == 5_000 and h == 4:
+                demon.pop("ETH")  # a missing forecast: this issue must not count
+            scores = {"demon": demon, "garch": base}
+            ids = {"demon": IDS["demon"], "garch": "0x" + "6" * 64}
+            settlements.append(Settlement(issue, h, "test", {}, {}, dict.fromkeys(ASSETS, 5), scores, "r1", ids))
+    primary = scoreboard(settlements)["forecasters"][IDS["demon"]]["vs"]["garch"]["primary"]
+    assert primary["scope"] == "1h+4h"
+    assert primary["issues"] == 2 * BLOCK_ISSUES + 9
+    assert primary["mean"] == pytest.approx(0.05, abs=0.01)
+    assert primary["z"]["72"] > 5
+    assert primary["z"]["168"] is None  # fewer than two 168-issue blocks

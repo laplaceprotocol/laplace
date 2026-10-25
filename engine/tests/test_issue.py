@@ -47,6 +47,7 @@ def test_a_sealed_issue_verifies_from_its_files_alone(sealed_files: tuple[bytes,
     assert m["failed"]["broken"].startswith("bad output")
     assert m["inputs"]["last_open"] == "2026-10-23T06:00:00Z"
     assert m["engine"] == {"version": "0.1.0", "commit": "abc"}
+    assert m["judging"] == []
     assert {f["name"] for f in m["forecasters"]} == {"naive", "wider", "broken", "demon"}
 
 

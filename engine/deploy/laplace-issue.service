@@ -11,7 +11,7 @@ Type=oneshot
 WorkingDirectory=%h/laplace/deploy/engine
 # LAPLACE_COMMIT_KEY_FILE, LAPLACE_R2_* and LAPLACE_TG_* (see engine/README.md); never part of the repository.
 EnvironmentFile=%h/laplace/secrets/engine.env
-ExecStart=%h/laplace/deploy/engine/.venv/bin/laplace-engine issue --release releases/r1 --private %h/laplace/private/r1 --data %h/laplace/live --commit --publish --settle
+ExecStart=%h/laplace/deploy/engine/.venv/bin/laplace-engine issue --release releases/r1 --private %h/laplace/private/r1 --data %h/laplace/live --commit --publish --settle --judging ../docs/judging/r1.md
 # The commit window closes 15 minutes after the hour; nothing useful can happen later.
 TimeoutStartSec=14min
 MemoryMax=8G

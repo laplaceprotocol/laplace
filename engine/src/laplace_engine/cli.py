@@ -50,6 +50,13 @@ def build_parser() -> argparse.ArgumentParser:
     seal.add_argument("--commit", action="store_true", help="commit the root on-chain (key: LAPLACE_COMMIT_KEY_FILE)")
     seal.add_argument("--publish", action="store_true", help="publish committed issues (credentials: LAPLACE_R2_*)")
     seal.add_argument("--settle", action="store_true", help="settle and score every question that has become due")
+    seal.add_argument(
+        "--judging",
+        type=Path,
+        action="append",
+        default=[],
+        help="a pre-registered rule in force (hashed into manifests)",
+    )
     seal.add_argument("--rpc", default=",".join(chain.RPC_URLS), help="RPC endpoints, comma-separated, tried in turn")
     seal.add_argument("--ledger", default=chain.LEDGER)
 
@@ -90,7 +97,24 @@ def cmd_release(args: argparse.Namespace) -> int:
     return 0
 
 
-def seal_issue(args: argparse.Namespace, number: int, target: Path) -> None:
+REPO = Path(__file__).resolve().parents[3]
+
+
+def judging_entries(paths: list[Path], alerts: notify.Alerts) -> list[dict[str, str]]:
+    """Each rule's path (relative to the repository) and keccak256. A missing rule is alerted and left out rather than
+    costing the hour."""
+    entries = []
+    for path in paths:
+        resolved = path.resolve()
+        if not resolved.is_file():
+            alerts.add(f"judging rule {path} not found; sealed without it", key=f"judging:{path}", every=HOURS_6)
+            continue
+        name = resolved.relative_to(REPO).as_posix() if resolved.is_relative_to(REPO) else resolved.name
+        entries.append({"path": name, "keccak256": "0x" + bytes(keccak(resolved.read_bytes())).hex()})
+    return entries
+
+
+def seal_issue(args: argparse.Namespace, number: int, target: Path, judging: list[dict[str, str]]) -> None:
     started = time.monotonic()
     rel = release.load(args.release, args.private)
     args.data.mkdir(parents=True, exist_ok=True)
@@ -101,7 +125,9 @@ def seal_issue(args: argparse.Namespace, number: int, target: Path) -> None:
     with tempfile.TemporaryDirectory(dir=args.data) as workdir:
         finals, failures = issue.run_release(rel, panel, Path(workdir), workers=args.workers)
     ledger = issue.Ledger(chain.CHAIN_ID, args.ledger)
-    sealed = issue.seal(number, rel, panel, finals, failures, ledger=ledger, commit=issue.engine_commit())
+    sealed = issue.seal(
+        number, rel, panel, finals, failures, ledger=ledger, commit=issue.engine_commit(), judging=judging
+    )
     files.write_atomic(target / "forecasts.json", sealed.forecasts)
     files.write_atomic(target / "manifest.json", sealed.manifest)
     for name, error in sealed.failures.items():
@@ -238,7 +264,7 @@ def run_issue(args: argparse.Namespace) -> int:
         log.info("issue %d is already sealed", number)  # never reseal: what may be committed is on disk
     else:
         try:
-            seal_issue(args, number, target)
+            seal_issue(args, number, target, judging_entries(args.judging, alerts))
             for name, error in json.loads((target / "manifest.json").read_bytes())["failed"].items():
                 alerts.add(f"{name} produced no forecast: {error}"[:300], key=f"forecaster:{name}", every=HOURS_6)
         except Exception as exc:

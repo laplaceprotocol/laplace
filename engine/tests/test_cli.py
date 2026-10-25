@@ -201,3 +201,31 @@ def test_digest_counts_the_last_day_and_reports_scores(
     assert "Record: 2/24 hours committed, 2 published" in out
     assert "Demon vs GARCH: 1h +0.250 (n=1)" in out
     assert "Directions only" in out
+
+
+def test_the_judging_rule_rides_in_the_manifest(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, make_panel: Callable[..., Panel]
+) -> None:
+    rel = Release("r9", "test", (Program("naive", NAIVE, True, "baseline"),), ())
+    release.write(rel, tmp_path / "r9", tmp_path / "private")
+    rule = tmp_path / "rule.md"
+    rule.write_text("# a rule\n")
+    monkeypatch.setattr(candles, "wait_for", lambda issue, cache_dir, deadline: make_panel(end_issue=issue))
+    inbox = Inbox()
+    monkeypatch.setattr(notify.Telegram, "from_env", classmethod(lambda cls: inbox))
+    base = ["issue", "--release", str(tmp_path / "r9"), "--private", str(tmp_path / "private")]
+    base += ["--data", str(tmp_path / "data"), "--workers", "1", "--judging", str(rule)]
+    assert cli.main([*base, "--issue", str(ISSUE)]) == 0
+    manifest = json.loads((tmp_path / "data" / "issues" / str(ISSUE) / "manifest.json").read_bytes())
+    assert manifest["judging"] == [{"path": "rule.md", "keccak256": "0x" + bytes(keccak(b"# a rule\n")).hex()}]
+    assert inbox.messages == []
+    rule.unlink()  # a missing rule costs nothing but an alert
+    assert cli.main([*base, "--issue", str(ISSUE + 1)]) == 0
+    assert json.loads((tmp_path / "data" / "issues" / str(ISSUE + 1) / "manifest.json").read_bytes())["judging"] == []
+    assert "judging rule" in inbox.messages[0]
+
+
+def test_the_repository_rule_for_r1_exists() -> None:
+    rule = cli.REPO / "docs" / "judging" / "r1.md"
+    assert rule.is_file()
+    assert "0x97bc9657cb5b4af73b46e0031ac385cab039e72fb9fb8edf591bd457f149914e" in rule.read_text()
