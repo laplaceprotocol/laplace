@@ -19,7 +19,14 @@ def issue(root: Path, n: int, *, committed: bool = True, published: bool = False
     """A really sealed issue, with a commitment that matches it (or, if not ``honest``, one that does not)."""
     finals = {"naive": np.full((len(ASSETS), len(HORIZONS), N_BINS), 1 / N_BINS)}
     sealed = seal(
-        n, RELEASE, synthetic_panel(end_issue=n), finals, {}, ledger=Ledger(4663, "0x" + "11" * 20), commit=None
+        n,
+        RELEASE,
+        synthetic_panel(end_issue=n),
+        finals,
+        {},
+        ledger=Ledger(4663, "0x" + "11" * 20),
+        commit=None,
+        calendar=None,
     )
     d = root / str(n)
     d.mkdir(parents=True)

@@ -45,6 +45,8 @@ class Calendar:
     last: date
     times: IntArray  # unix seconds, ascending
     kinds: tuple[str, ...]
+    source: Path | None = None  # the file it was read from
+    raw: bytes = b""  # that file's bytes, so its hash names exactly what was read
 
     @property
     def start(self) -> int:
@@ -83,7 +85,7 @@ def _days(values: list[str], first: date, last: date, what: str) -> list[date]:
     return days
 
 
-def parse(spec: dict[str, Any]) -> Calendar:
+def parse(spec: dict[str, Any], *, source: Path | None = None, raw: bytes = b"") -> Calendar:
     first, last = (date.fromisoformat(d) for d in spec["covers"])
     events: list[tuple[int, str]] = []
     for kind in RELEASES:
@@ -102,9 +104,14 @@ def parse(spec: dict[str, Any]) -> Calendar:
             events.append((eastern(day, early_close if day in early else closes), "us-close"))
         day += timedelta(days=1)
     events.sort()
-    return Calendar(first, last, np.array([t for t, _ in events], dtype=np.int64), tuple(k for _, k in events))
+    times = np.array([t for t, _ in events], dtype=np.int64)
+    return Calendar(first, last, times, tuple(k for _, k in events), source, raw)
 
 
 @cache
 def load(path: Path = DEFAULT) -> Calendar:
-    return parse(tomllib.loads(path.read_text()))
+    raw = path.read_bytes()
+    return parse(tomllib.loads(raw.decode()), source=path, raw=raw)
+
+
+EMPTY = Calendar(date(1970, 1, 1), date(1970, 1, 1), np.zeros(0, dtype=np.int64), ())  # covers nothing, lists nothing

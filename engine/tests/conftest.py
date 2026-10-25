@@ -46,7 +46,10 @@ def make_panel() -> Callable[..., Panel]:
 
 @pytest.fixture(autouse=True)
 def no_live_senses(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Tests never reach third-party APIs: live senses are empty unless a test provides them."""
+    """Tests never reach third-party APIs: every live sense is unknown unless a test provides them."""
     from laplace_engine import cli
 
-    monkeypatch.setattr(cli.sense_data, "build", lambda panel, cache_dir, **kwargs: {})
+    def unknown(panel: Panel, cache_dir: object, **kwargs: object) -> dict[str, np.ndarray]:
+        return {name: np.full(panel.close.shape, np.nan) for name in cli.sense_data.NAMES}
+
+    monkeypatch.setattr(cli.sense_data, "build", unknown)

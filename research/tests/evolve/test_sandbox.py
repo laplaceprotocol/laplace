@@ -15,6 +15,8 @@ BAD = {
     "eval": "def forecast(ctx):\n    return eval('1')\n",
     "no forecast": "def predict(ctx):\n    return [1] * 10\n",
     "syntax": "def forecast(ctx)\n    return 1\n",
+    "str.format": "def forecast(ctx):\n    s = '{0.lib}'.format(ctx)\n    return [1] * 10\n",
+    "format_map": "def forecast(ctx):\n    s = '{x}'.format_map({'x': 1})\n    return [1] * 10\n",
 }
 
 

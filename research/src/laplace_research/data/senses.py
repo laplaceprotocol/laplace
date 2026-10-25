@@ -62,6 +62,10 @@ def _cached(cache: Path, period_end: datetime, fetch: Any) -> Any:
     return rows
 
 
+class SourceUnavailable(RuntimeError):
+    """A source kept refusing requests (rate-limited on every attempt)."""
+
+
 def _get(client: httpx.Client, url: str, params: dict[str, Any]) -> Any:
     for attempt in range(6):
         time.sleep(REQUEST_INTERVAL_S)
@@ -71,7 +75,7 @@ def _get(client: httpx.Client, url: str, params: dict[str, Any]) -> Any:
             continue
         response.raise_for_status()
         return response.json()
-    raise RuntimeError(f"{url}: rate-limited on every attempt")
+    raise SourceUnavailable(f"{url}: rate-limited on every attempt")
 
 
 def dvol_hourly(
