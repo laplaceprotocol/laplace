@@ -72,15 +72,25 @@ A release ([`engine/releases/r1/release.json`](../../engine/releases/r1/release.
   directory; evolved champions are private until revealed, and their identity is published from the first issue, so a
   revealed program can be matched to its whole record. Before every run the engine checks each source against the
   release.
-- **Pools** are linear pools of the release's programs with integer weights in parts per million. A pool's identity is
-  the keccak256 of its canonical specification (members and weights), and its forecast is mixed from the members'
-  *rounded* forecasts in integer arithmetic, so anyone can recompute it exactly from the published record.
+- **Pools** are linear pools of the release's programs with integer weights in parts per million, either one set for
+  every horizon (`linear-pool`) or one set per horizon (`linear-pool-by-horizon`). A pool's identity is the keccak256
+  of its canonical specification (members and weights), and its forecast is mixed from the members' *rounded*
+  forecasts in integer arithmetic, so anyone can recompute it exactly from the published record. No two forecasters
+  of a release may share an identity.
 
 Release r1 is frozen from research run `evolve-poc2` exactly as its report judged it: the eight island champions,
 the Demon (the pool of champions, weights fitted on validation: seasonality 44.8%, ranges 24.5%, regimes 11.5%,
 clustering 10.8%, spillover 4.5%, tails 3.8%), and the baseline ladder (naive, EWMA, GARCH, HAR) with parameters
 fitted on the search window. See [the PoC 2 note](../research/2026-10-24-poc2-evolution.md) for what that
 configuration did on the holdout.
+
+Release r1.1 (live from 2026-10-25) keeps every r1 forecaster, identity and record unchanged, and adds shadow
+forecasters, exploratory until a rule of their own judges them: **the monkey** (equal odds on every bin, the floor
+every forecaster must clear) and **demon-h**, a pool of all thirteen programs, baselines and monkey included, with its
+own EM weights at each horizon (fitted on PoC 2's validation window; GARCH gets 5.6% at 24 hours). A single-weight
+pool of the same programs fitted to exactly the Demon's weights (EM gives the baselines and the monkey nothing), so it
+was left out: two forecasters with one identity would collide. The fit's holdout screening is kept with the release
+([`screening.json`](../../engine/releases/r1.1/screening.json)).
 
 The baselines run as ordinary programs on the same 720-hour window, so their recursions start from the window
 rather than from the start of the research panel, and HAR's 720-hour mean covers the window's 719 returns. Rerun over
