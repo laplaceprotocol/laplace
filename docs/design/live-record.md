@@ -7,10 +7,13 @@ settle. The files that describe the issue are then published, so anyone can rebu
 chain, and score the forecasts once they settle. Code: `engine/` ([README](../../engine/README.md)).
 
 ## An hour
-1. **:00:30 UTC.** The engine fetches the last 744 hourly candles of every asset and waits until the candle that
+1. **:07 UTC.** The engine fetches the last 744 hourly candles of every asset and waits until the candle that
    closed at the top of the hour is published for all of them and the exchange has opened the new hour (at most until
    :10). If the exchange's candle feed lags past :05, its own clock vouches that the hour has closed, and the candles
-   available then are used: the committed last candle is the definitive starting price.
+   available then are used: the committed last candle is the definitive starting price. The run starts at :07, not
+   at the top of the hour, because Coinbase re-aggregates a just-closed hourly candle a little over five minutes later
+   (the close and volume of the less liquid assets move by up to 0.2%); sealing after that commits the exchange's
+   final candle. Only candles that closed by the top of the hour are ever read.
 2. **Forecasts.** Every program of the release runs once per question in a fresh process that only ever reads the
    720 candles before the issue time (the same sandbox and past-only reader as in research). A program that fails
    is listed in the manifest and has no forecasts that hour; a pool needs all its members.

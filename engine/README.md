@@ -22,7 +22,7 @@ uv run laplace-engine verify --issue ISSUE
 ```
 
 ## Operations
-The hourly run is a systemd user timer (`deploy/laplace-issue.timer`, 30 seconds after every hour) that runs
+The hourly run is a systemd user timer (`deploy/laplace-issue.timer`, 7 minutes after every hour) that runs
 `laplace-engine issue --commit --publish` from a dedicated worktree, so development never changes what runs.
 `deploy/deploy.sh [ref]` checks out a ref there (default `origin/main`), syncs the locked dependencies and installs the
 units. The service reads its secrets from an environment file outside the repository:
@@ -52,7 +52,7 @@ Every step is isolated and retried on the next run; `status` shows gaps and conf
 or not committed, a recovered commitment, a gap, a conflict, a forecaster that produced nothing, a question that could
 not be settled, a failed upload, a low key balance (repeats are throttled). If the run itself crashes, times out or is
 killed, `laplace-alert.service` (systemd `OnFailure=`) reports it; runs that already reported their problems exit with
-status 3 and are not reported twice. `laplace-digest.timer` sends a daily digest at 08:05 UTC: the last 24 hours, the
+status 3 and are not reported twice. `laplace-digest.timer` sends a daily digest at 08:15 UTC: the last 24 hours, the
 scores so far, the key's runway. Independently of this machine, the Cloudflare Worker in
 [`../ops/watch`](../ops/watch) checks the public record every hour and alerts if the current hour is missing.
 
