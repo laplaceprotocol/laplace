@@ -41,3 +41,9 @@ def interval(values: Sequence[float], block: int, *, level: float = 0.95, seed: 
     means = np.sort(resampled_means(values, block, block_starts(len(values), block, seed=seed)))
     tail = (1 - level) / 2
     return float(means[int(tail * len(means))]), float(means[int((1 - tail) * len(means)) - 1])
+
+
+def standard_error(values: Sequence[float], block: int, *, seed: int = 0) -> float:
+    """The bootstrap standard error of the mean: the standard deviation of the resampled means."""
+    means = resampled_means(values, block, block_starts(len(values), block, seed=seed))
+    return float(np.std(means, ddof=1))

@@ -36,8 +36,10 @@ CLOSE = 3  # position of the close in a manifest's last_candle entries (open, hi
 SCHEMA = "laplace/settlement/1"
 BOARD_SCHEMA = "laplace/scoreboard/1"
 BLOCK_ISSUES = 72  # bootstrap blocks of 72 hourly issues, as in research
+CHECK_BLOCK_ISSUES = 168  # the pre-registered rule's second block length
 MIN_BLOCKS = 2  # below two blocks of issues, no interval is shown
 BASELINES = ("naive", "garch", "har")
+PRIMARY_HORIZONS = (1, 4)  # the pre-registered primary questions (docs/judging/r1.md)
 
 FetchClose = Callable[[str, int], float]  # (asset, hour start) -> close of the last candle opening at or before it
 
@@ -180,6 +182,23 @@ def _comparison(series: dict[int, float]) -> dict[str, Any]:
     return {"mean": fmean(values), "interval95": ci, "issues": len(values)}
 
 
+def _primary(diffs: dict[int, dict[int, list[float]]], expected: dict[tuple[int, int], int]) -> dict[str, Any]:
+    """The pre-registered statistic: per issue, the mean difference over every asset at 1 and 4 hours, counted only
+    when all of those questions settled for both sides; the gain over issues and its z at both block lengths."""
+    series = {
+        issue: fmean(d for h in PRIMARY_HORIZONS for d in by_h[h])
+        for issue, by_h in diffs.items()
+        if all(h in by_h and len(by_h[h]) == expected[(issue, h)] for h in PRIMARY_HORIZONS)
+    }
+    values = [series[i] for i in sorted(series)]
+    z: dict[str, float | None] = {}
+    for block in (BLOCK_ISSUES, CHECK_BLOCK_ISSUES):
+        se = bootstrap.standard_error(values, block) if len(values) >= MIN_BLOCKS * block else 0.0
+        z[str(block)] = fmean(values) / se if se > 0 else None
+    scope = "+".join(f"{h}h" for h in PRIMARY_HORIZONS)
+    return {"scope": scope, "mean": fmean(values) if values else None, "z": z, "issues": len(values)}
+
+
 def scoreboard(settlements: Sequence[Settlement], *, baselines: Iterable[str] = BASELINES) -> dict[str, Any]:
     """Per forecaster identity: questions, mean log score overall and by horizon, and paired gains over each baseline.
 
@@ -191,6 +210,7 @@ def scoreboard(settlements: Sequence[Settlement], *, baselines: Iterable[str] = 
     scores: dict[str, dict[tuple[int, int, str], float]] = defaultdict(dict)
     labels: dict[str, tuple[str, str]] = {}
     by_name: dict[tuple[int, str], str] = {}  # (issue, name) -> identity, to pair with that issue's baselines
+    expected = {(s.issue, s.horizon): len(s.bins) for s in settlements}  # questions per issue and horizon
     for s in settlements:
         for name, by_asset in s.scores.items():
             ident = s.ids.get(name, f"{s.release}:{name}")
@@ -237,6 +257,7 @@ def scoreboard(settlements: Sequence[Settlement], *, baselines: Iterable[str] = 
             result: dict[str, Any] = (
                 _comparison(complete) if complete else {"mean": None, "interval95": None, "issues": 0}
             )
+            result["primary"] = _primary(diffs, expected)
             result["by_horizon"] = {
                 str(h): _comparison({i: fmean(by_h[h]) for i, by_h in diffs.items() if h in by_h})
                 for h in HORIZONS
