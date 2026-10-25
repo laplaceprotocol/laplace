@@ -4,8 +4,8 @@ Laplace's claim is that every forecast was committed before its outcome and neve
 breaks that claim, or lets someone else's forecasts or prices pass as ours, is a vulnerability.
 
 ## Reporting
-Report privately through GitHub: **Security → Report a vulnerability** on this repository. Please don't open a public
-issue. We acknowledge reports within 72 hours, keep you informed, and credit you when the fix is published unless you
+Report privately, through GitHub (**Security → Report a vulnerability** on this repository) or by email to
+**security@laplaceprotocol.com**. Please don't open a public issue. We acknowledge reports within 72 hours, keep you informed, and credit you when the fix is published unless you
 prefer otherwise. There is no paid bounty yet.
 
 ## In scope
