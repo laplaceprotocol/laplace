@@ -32,6 +32,7 @@ AFTER_HOURS = 48  # and how far ahead
 
 Events = tuple[tuple[float, str], ...]
 IntArray = npt.NDArray[np.int64]
+FloatArray = npt.NDArray[np.float64]
 
 
 def eastern(day: date, at: time) -> int:
@@ -62,6 +63,23 @@ class Calendar:
             return ()
         i, j = np.searchsorted(self.times, [lo, hi], side="left")
         return tuple(((int(self.times[k]) - at) / HOUR, self.kinds[k]) for k in range(int(i), int(j)))
+
+    def covers(self, at: IntArray) -> npt.NDArray[np.bool_]:
+        """Whether the calendar reaches every event a context at each forecast time would list."""
+        out: npt.NDArray[np.bool_] = (at - BEFORE_HOURS * HOUR >= self.start) & (at + AFTER_HOURS * HOUR <= self.end)
+        return out
+
+    def session_seconds(self, at: IntArray) -> FloatArray:
+        """For each instant, the seconds of NYSE regular session from the calendar's start up to it."""
+        kinds = np.array(self.kinds)
+        opens, closes = self.times[kinds == "us-open"], self.times[kinds == "us-close"]
+        done = np.concatenate([[0], np.cumsum(closes - opens)])
+        finished = np.searchsorted(closes, at, side="right")
+        started = np.searchsorted(opens, at, side="right")
+        out: FloatArray = done[finished].astype(np.float64)
+        inside = started > finished
+        out[inside] += at[inside] - opens[finished[inside]]
+        return out
 
     def count(self, kinds: tuple[str, ...], lo: IntArray, hi: IntArray) -> IntArray:
         """For each pair of instants, the number of events of ``kinds`` with ``lo <= time < hi``."""
