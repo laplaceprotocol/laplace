@@ -20,6 +20,7 @@ import httpx
 from eth_hash.auto import keccak
 
 from laplace_engine import candles, chain, files, issue, notify, publish, release, settle, verify
+from laplace_research.data import events as calendar_data
 from laplace_research.data.candles import fetch_hourly
 from laplace_research.evolve import senses as sense_data
 from laplace_research.evolve.feed import HORIZONS, product
@@ -198,6 +199,13 @@ def seal_issue(
     panel = panel.with_senses(sense_data.build(panel, args.data / "senses", problems=problems))
     for problem in problems:
         alerts.add(f"sense unavailable: {problem}", key=f"sense:{problem.split(':')[0]}", every=HOURS_6)
+    calendar = calendar_data.load()
+    if datetime.fromtimestamp(calendar.end, UTC) - candles.issue_time(number) < CALENDAR_NOTICE:
+        alerts.add(
+            f"the event calendar ends {calendar.last}: extend research/src/laplace_research/data/events.toml",
+            key="calendar",
+            every=timedelta(days=1),
+        )
     with tempfile.TemporaryDirectory(dir=args.data) as workdir:
         finals, failures = issue.run_release(rel, panel, Path(workdir), workers=args.workers)
     ledger = issue.Ledger(chain.CHAIN_ID, args.ledger)
@@ -218,6 +226,7 @@ GAP = "gap.json"  # an issue whose window closed without a commitment
 CONFLICT = "conflict.json"  # an issue committed with a root other than its local files (never published)
 SOFT_FAILURE = 3  # the run finished but something needed attention, and the operator was alerted
 HOURS_6 = timedelta(hours=6)
+CALENDAR_NOTICE = timedelta(days=60)  # how early to ask for the event calendar to be extended
 
 
 def commit_issue(ledger: chain.Ledger, number: int, target: Path, alerts: notify.Alerts) -> bool:

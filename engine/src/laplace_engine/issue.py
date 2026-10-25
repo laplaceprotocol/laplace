@@ -22,6 +22,7 @@ from laplace_engine import __version__
 from laplace_engine.quantize import mix_basis_points, to_basis_points
 from laplace_engine.record import Leaf, Tree
 from laplace_engine.release import Release, canonical, hex32
+from laplace_research.data import events as calendar_data
 from laplace_research.data.candles import HOUR
 from laplace_research.evolve.context import LOOKBACK
 from laplace_research.evolve.evaluate import Evaluator
@@ -43,6 +44,7 @@ QUESTION = (
     "of the horizon, in percent of log return); the first and last bins are open."
 )
 PRICES = "Coinbase Exchange hourly candles for <asset>-USD; an hour without trades repeats the previous close."
+CALENDAR = "research/src/laplace_research/data/events.toml"  # where the scheduled events come from, in the repository
 
 Forecasts = dict[str, list[list[tuple[int, ...]]]]  # forecaster -> [asset][horizon index] -> bps
 
@@ -145,9 +147,25 @@ def _number(value: float) -> float | None:
     return float(value) if np.isfinite(value) else None
 
 
+def scheduled(at: int) -> dict[str, Any]:
+    """The scheduled events every program saw at forecast time ``at`` (``ctx.events``), and the calendar they came
+    from."""
+    calendar = calendar_data.load()
+    return {
+        "calendar": CALENDAR,
+        "keccak256": hex32(bytes(keccak(calendar_data.DEFAULT.read_bytes()))),
+        "covers": [calendar.first.isoformat(), calendar.last.isoformat()],
+        "around": [[hours, kind] for hours, kind in calendar.around(at)],
+        "around_layout": (
+            f"[hours from the issue time, kind] for every event from {calendar_data.BEFORE_HOURS} hours before to "
+            f"{calendar_data.AFTER_HOURS} hours after it"
+        ),
+    }
+
+
 def inputs(panel: Panel) -> dict[str, Any]:
-    """What the programs saw: the last ``LOOKBACK`` hours of candles and senses, identified by hash, and the last
-    hour in full."""
+    """What the programs saw: the last ``LOOKBACK`` hours of candles and senses, identified by hash, the last hour in
+    full, and the scheduled events around the forecast time."""
     names = sorted(panel.senses)
     series = [getattr(panel, f)[:, -LOOKBACK:] for f in FIELDS] + [panel.senses[n][:, -LOOKBACK:] for n in names]
     window = np.stack(series, axis=-1).transpose(1, 0, 2)
@@ -159,6 +177,7 @@ def inputs(panel: Panel) -> dict[str, Any]:
         "keccak256": hex32(bytes(keccak(np.ascontiguousarray(window, dtype="<f8").tobytes()))),
         "keccak256_layout": f"little-endian float64, ordered hour, asset, field ({fields})",
         "last_candle": {a: [float(getattr(panel, f)[i, -1]) for f in FIELDS] for i, a in enumerate(panel.assets)},
+        "events": scheduled(int(panel.ts[-1]) + HOUR),
     }
     if names:
         out["last_senses"] = {

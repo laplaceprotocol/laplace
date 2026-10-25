@@ -102,6 +102,13 @@ nothing, and demon-hs is the best pool so far on the 1- and 4-hour questions (+0
 against the Demon's +0.0210): development evidence, kept in
 [`screening.json`](../../engine/releases/r1.2/screening.json).
 
+Programs also see when markets are scheduled to move (`ctx.events`, since 2026-10-25): FOMC decisions, CPI and
+jobs-report releases, and the open and close of the NYSE regular session, from 24 hours before to 48 hours after the
+forecast time. The dates are copied from the publishers' calendars into
+[`events.toml`](../../research/src/laplace_research/data/events.toml), which names each source, and converted from
+US Eastern Time with daylight saving. Every issue lists the events its programs saw and the calendar's hash, and the
+engine alerts 60 days before the calendar runs out. Nothing about what an event announces is ever an input.
+
 The baselines run as ordinary programs on the same 720-hour window, so their recursions start from the window
 rather than from the start of the research panel, and HAR's 720-hour mean covers the window's 719 returns. Rerun over
 the PoC 2 holdout (11,487 questions), the naive, EWMA and GARCH programs match the research baselines to within
@@ -118,8 +125,9 @@ implementations identical.
 
 **Manifest** (canonical JSON: sorted keys, no whitespace, ASCII; its keccak256 is committed): the issue and its time,
 the ledger, the engine version and git commit, the release, the feed definition, the inputs (the hash of the 720
-candles the programs saw, as little-endian float64 ordered hour, asset, field, and the last candle of every asset in
-full), the forecasters with their identities, any failures, the pre-registered judging rules in force (each one's
+hours of candles and senses the programs saw, as little-endian float64 ordered hour, asset, field; the last candle and
+senses of every asset in full; and the scheduled events around the issue time, with the hash of the calendar they
+come from), the forecasters with their identities, any failures, the pre-registered judging rules in force (each one's
 path and keccak256, so the chain dates the rule before the results it judges), the leaf encoding, the number of leaves
 and the root.
 
@@ -130,7 +138,7 @@ and the root.
    `rootOf(issue)`, and the commitment's block falls inside the issue's window.
 2. The leaves rebuilt from `forecasts.json` give that root, and every pool's forecasts are its members' forecasts
    mixed with its weights. `laplace-engine verify --issue N` does steps 1 and 2 from the public files and the chain.
-3. Public programs rerun on the candles the manifest identifies give the published forecasts (identical with the
+3. Public programs rerun on the inputs the manifest identifies give the published forecasts (identical with the
    locked dependencies; floating-point differences between library versions can move a rounding by a basis point).
 4. Once a private program is revealed, its source hashes to its identity, and rerunning it reproduces its record.
 

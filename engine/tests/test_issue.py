@@ -18,6 +18,7 @@ from laplace_research.evolve.panel import Panel
 from .conftest import ISSUE, synthetic_panel
 
 LEDGER = Ledger(4663, "0x" + "11" * 20)
+REPO = Path(__file__).resolve().parents[2]
 WIDER = NAIVE.replace("sd_hour * math.sqrt(ctx.horizon)", "1.5 * sd_hour * math.sqrt(ctx.horizon)")
 BROKEN = "def forecast(ctx):\n    return [1.0] * 9\n"
 
@@ -135,3 +136,13 @@ def test_inputs_record_the_senses_programs_saw(make_panel: Callable[..., Panel])
     assert sensed["last_senses"]["BTC"] == {"rv": 1e-5}
     assert sensed["last_senses"]["ETH"] == {"rv": None}  # unknown, and JSON has no NaN
     json.dumps(sensed, allow_nan=False)
+
+
+def test_inputs_list_the_scheduled_events_programs_saw(make_panel: Callable[..., Panel]) -> None:
+    from laplace_engine.issue import inputs
+
+    events = inputs(make_panel())["events"]  # forecast at 07:00 UTC on Friday 2026-10-23
+    assert events["around"] == [[-17.5, "us-open"], [-11.0, "us-close"], [6.5, "us-open"], [13.0, "us-close"]]
+    assert events["covers"] == ["2025-01-01", "2027-12-31"]
+    assert (REPO / events["calendar"]).is_file()
+    assert len(events["keccak256"]) == 66
