@@ -1,0 +1,30 @@
+# Version updates. Security updates are enabled separately and arrive whenever an advisory applies.
+# The engine's numeric stack is pinned on purpose: a numpy or scipy release can move a program's output, so engine
+# updates are batched monthly and land only as a deliberate, tested upgrade.
+version: 2
+updates:
+  - package-ecosystem: uv
+    directory: /research
+    schedule:
+      interval: monthly
+    groups:
+      python:
+        patterns: ["*"]
+  - package-ecosystem: uv
+    directory: /engine
+    schedule:
+      interval: monthly
+    groups:
+      python:
+        patterns: ["*"]
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      actions:
+        patterns: ["*"]
+  - package-ecosystem: gitsubmodule
+    directory: /
+    schedule:
+      interval: monthly
