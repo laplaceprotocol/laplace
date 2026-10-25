@@ -6,6 +6,8 @@
   variance forecasts.
 - ``har``: a heterogeneous autoregressive model of future realized variance on 1-, 24-, 168- and 720-hour realized
   variance, fitted by least squares per asset and horizon, with Student-t tails.
+- with senses: ``rv-har`` (HAR on 5-minute realized variance), ``iv-har`` (plus the variance implied by DVOL) and
+  ``ev-har`` (IV-HAR scaled for the US session, weekends and scheduled releases, ``overlay_features``).
 
 Every parameter is fitted on the search window only. Tail shapes (``nu``) are chosen per horizon by the same binned log
 score the programs are judged by. Each fitted baseline exposes its parameters (``params``, JSON-ready), so it can be
@@ -22,7 +24,9 @@ from typing import Any
 import numpy as np
 from scipy import optimize, signal, special
 
-from laplace_research.evolve.feed import HORIZONS, N_BINS, FloatArray, IntArray, edges, finalize
+from laplace_research.data.events import RELEASES, Calendar
+from laplace_research.data.events import load as load_calendar
+from laplace_research.evolve.feed import HORIZONS, N_BINS, FloatArray, IntArray, bin_index, edges, finalize
 
 NU_GRID = (2.5, 3.0, 4.0, 5.0, 7.0, 10.0, 20.0, 50.0)
 LAMBDA_GRID = (0.9, 0.95, 0.97, 0.98, 0.99, 0.995, 0.998)
@@ -312,6 +316,97 @@ def iv_har(
     )
 
 
+HOUR = 3600
+OVERLAY_PRIOR_SD = 1.0  # a Gaussian prior on each overlay coefficient, in log variance per unit of input
+
+
+def overlay_names(horizon: int) -> list[str]:
+    """The overlay's inputs at one horizon, in the order of its coefficients."""
+    hours = [f"hour-{j}" for j in range(24)] if horizon <= 4 else []
+    return ["weekend", *hours, "releases", "recent-releases", "upcoming-releases", "us-open", "us-session"]
+
+
+def overlay_features(calendar: Calendar, at: IntArray, horizon: int) -> FloatArray:
+    """``[time, input]``: the overlay's inputs at forecast times ``at`` (unix seconds), exactly as a program computes
+    them from ``ctx.hour``, ``ctx.weekday`` and ``ctx.events``:
+
+    - ``weekend``: the share of the window's hours that start on a Saturday or Sunday (UTC);
+    - ``hour-j`` (1- and 4-hour horizons only): 1 at UTC hour ``j`` (the forecast's), minus 1/24;
+    - ``releases``: FOMC, CPI and jobs releases inside the window (``0 <= hours < h``); ``recent-releases``: in the 3
+      hours before the forecast; ``upcoming-releases``: in the 2 hours after the window;
+    - ``us-open``: NYSE opens inside the window; ``us-session``: the share of the window the session is open.
+
+    The calendar's inputs are zero where it does not cover a context's events (``ctx.events`` is then empty).
+    """
+    h = horizon
+    starts = at[:, None] + np.arange(h)[None, :] * HOUR
+    cols = [(((starts // 86400) + 3) % 7 >= 5).mean(axis=1)]  # 1970-01-01 was a Thursday
+    if h <= 4:
+        hour = (at // HOUR) % 24
+        cols += [(hour == j) - 1 / 24 for j in range(24)]
+    end = at + h * HOUR
+    scheduled = [
+        calendar.count(RELEASES, at, end),
+        calendar.count(RELEASES, at - 3 * HOUR, at),
+        calendar.count(RELEASES, end, end + 2 * HOUR),
+        calendar.count(("us-open",), at, end),
+        (calendar.session_seconds(end) - calendar.session_seconds(at)) / (h * HOUR),
+    ]
+    covered = calendar.covers(at)
+    cols += [np.where(covered, x, 0.0) for x in scheduled]
+    out: FloatArray = np.stack(cols, axis=-1).astype(np.float64)
+    return out
+
+
+def _realized(close: FloatArray, times: IntArray) -> IntArray:
+    """``[asset, horizon, sample]`` bin index of the realized log return, as ``evaluate.realized_bins``."""
+    out = np.empty((close.shape[0], len(HORIZONS), len(times)), dtype=np.int64)
+    for j, h in enumerate(HORIZONS):
+        out[:, j] = bin_index(np.log(close[:, times + h] / close[:, times]), h)
+    return out
+
+
+def ev_har(iv: Baseline, close: FloatArray, ts: IntArray, calendar: Calendar, fit_times: IntArray) -> Baseline:
+    """IV-HAR scaled by a fitted overlay: ``sd * exp(x @ beta / 2)``, ``x`` the overlay's inputs
+    (``overlay_features``), ``beta`` per horizon at the maximum of the binned log score over every asset of the search
+    window under a Gaussian prior (``OVERLAY_PRIOR_SD``), then tails chosen again. The prior is scaled to the number
+    of questions, so it shrinks an input by how rarely it occurs, not by a fixed amount.
+
+    The overlay is fitted on every hour from the first fit time to the last: a sample every few hours would never see
+    some hours of the day, and their inputs would stay unfitted."""
+    at = ts + HOUR  # the forecast time of each hour
+    hours = np.arange(int(fit_times[0]), int(fit_times[-1]) + 1, dtype=np.int64)
+    realized_fit = _realized(close, hours)
+    base_fit = iv.sd(hours)
+    betas: dict[int, FloatArray] = {}
+    for j, h in enumerate(HORIZONS):
+        x = overlay_features(calendar, at[hours], h)
+        nu, sd_j, realized = iv.nu[h], base_fit[:, j], realized_fit[:, j]
+
+        def loss(
+            beta: FloatArray,
+            x: FloatArray = x,
+            nu: float = nu,
+            sd_j: FloatArray = sd_j,
+            h: int = h,
+            realized: IntArray = realized,
+        ) -> float:
+            scaled = sd_j * np.exp(0.5 * (x @ beta))[None, :]
+            prior = float(beta @ beta) / (2 * OVERLAY_PRIOR_SD**2 * realized.size)
+            return -_mean_log_score(t_bins(scaled, nu, h), realized) + prior
+
+        betas[h] = optimize.minimize(loss, np.zeros(x.shape[1]), method="L-BFGS-B").x
+
+    def sd(times: IntArray) -> FloatArray:
+        out = iv.sd(times)
+        for j, h in enumerate(HORIZONS):
+            out[:, j] *= np.exp(0.5 * (overlay_features(calendar, at[times], h) @ betas[h]))[None, :]
+        return out
+
+    overlay = {str(h): {"inputs": overlay_names(h), "beta": [float(v) for v in betas[h]]} for h in HORIZONS}
+    return Baseline("ev-har", sd, _fit_nu(sd, realized_fit, hours), iv.params | {"overlay": overlay})
+
+
 def ladder(
     close: FloatArray,
     realized_fit: IntArray,
@@ -320,8 +415,10 @@ def ladder(
     *,
     senses: dict[str, FloatArray] | None = None,
     assets: tuple[str, ...] | None = None,
+    ts: IntArray | None = None,
 ) -> list[Baseline]:
-    """The classical ladder; with senses, also RV-HAR (needs ``rv``) and IV-HAR (also needs ``dvol`` and ``assets``)."""
+    """The classical ladder; with senses, also RV-HAR (needs ``rv``) and IV-HAR (also needs ``dvol`` and ``assets``),
+    and with the panel's hours (``ts``) EV-HAR on top of IV-HAR."""
     rungs = [
         naive(close),
         ewma(close, realized_fit, fit_times),
@@ -333,4 +430,6 @@ def ladder(
         rungs.append(rv_har(close, senses["rv"], realized_fit, fit_times))
         if "dvol" in senses and assets is not None:
             rungs.append(iv_har(close, senses["rv"], senses["dvol"], assets, realized_fit, fit_times))
+            if ts is not None:
+                rungs.append(ev_har(rungs[-1], close, ts, load_calendar(), fit_times))
     return rungs

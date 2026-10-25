@@ -174,13 +174,88 @@ def forecast(ctx):
 '''
 
 
+EV_HAR = '''\
+import math
+import numpy as np
+
+WINDOWS = {windows!r}
+HOURS_PER_YEAR = 8760
+RELEASES = ("fomc", "cpi", "nfp")
+# Per asset and horizon: IV-HAR's intercept, one coefficient per window of 5-minute realized variance and one for the
+# hourly variance implied by DVOL, fitted by least squares. BETA: the overlay's coefficients per horizon, in the order
+# _inputs returns them, fitted by binned log score. NU: Student-t degrees of freedom per horizon, chosen by binned log
+# score. All fitted on {origin}.
+COEFS = {{
+{coefs}
+}}
+BETA = {beta}
+NU = {nu}
+
+
+{senses_rv}
+
+def _implied(ctx):
+    """The hourly variance implied by the asset's DVOL index at the forecast hour, else by BTC's (NaN if neither)."""
+    value = math.nan
+    own = ctx.senses.get("dvol")
+    if own is not None:
+        value = float(own[-1])
+    if not math.isfinite(value):
+        market = ctx.peer_senses.get("BTC", {{}}).get("dvol")
+        value = float(market[-1]) if market is not None else math.nan
+    return (value / 100) ** 2 / HOURS_PER_YEAR
+
+
+def _session_hours(events, horizon):
+    """Hours of NYSE regular session inside the forecast's window."""
+    total, opened = 0.0, None
+    for hours, kind in events:
+        if kind == "us-open":
+            opened = hours
+        elif kind == "us-close" and opened is not None:
+            total += max(0.0, min(hours, horizon) - max(opened, 0.0))
+            opened = None
+    return total
+
+
+def _inputs(ctx):
+    """The overlay's inputs: the window's weekend share, the UTC hour (1- and 4-hour horizons), then the scheduled
+    releases inside, just before and just after the window, NYSE opens inside it, and its share of the session."""
+    h = ctx.horizon
+    x = [sum(1 for k in range(h) if (ctx.weekday + (ctx.hour + k) // 24) % 7 >= 5) / h]
+    if h <= 4:
+        x += [(1.0 if ctx.hour == j else 0.0) - 1 / 24 for j in range(24)]
+    releases = [t for t, kind in ctx.events if kind in RELEASES]
+    x.append(sum(1 for t in releases if 0 <= t < h))
+    x.append(sum(1 for t in releases if -3 <= t < 0))
+    x.append(sum(1 for t in releases if h <= t < h + 2))
+    x.append(sum(1 for t, kind in ctx.events if kind == "us-open" and 0 <= t < h))
+    x.append(_session_hours(ctx.events, h) / h)
+    return x
+
+
+def forecast(ctx):
+    """EV-HAR: IV-HAR's variance, scaled for the US session, weekends and scheduled releases."""
+    filled = _filled(ctx)
+    means = [float(np.mean(filled[-w:])) for w in WINDOWS]
+    implied = _implied(ctx)
+    if not math.isfinite(implied):
+        implied = means[3]
+    c = COEFS[ctx.asset][ctx.horizon]
+    var = c[0] + (sum(k * m for k, m in zip(c[1:5], means)) + c[5] * implied) * ctx.horizon
+    floor = 0.1 * means[2] * ctx.horizon
+    scale = math.exp(0.5 * sum(b * x for b, x in zip(BETA[ctx.horizon], _inputs(ctx))))
+    return ctx.lib.student_t_probs(math.sqrt(max(var, floor)) * scale, NU[ctx.horizon], ctx.edges)
+'''
+
+
 def _nu(nu: Mapping[int, float]) -> str:
     return "{" + ", ".join(f"{h}: {float(v)!r}" for h, v in sorted(nu.items())) + "}"
 
 
 def ladder_programs(ladder: Sequence[Baseline], assets: Sequence[str], origin: str) -> dict[str, str]:
-    """Source code for naive, EWMA, GARCH and HAR (and RV-HAR and IV-HAR when the ladder has them) from a fitted
-    research ladder, keyed by program name."""
+    """Source code for naive, EWMA, GARCH and HAR (and RV-HAR, IV-HAR and EV-HAR when the ladder has them) from a
+    fitted research ladder, keyed by program name."""
     rungs = {b.name.split("(")[0]: b for b in ladder}
     ewma, garch, har = rungs["ewma"], rungs["garch"], rungs["har-rv"]
 
@@ -222,4 +297,22 @@ def ladder_programs(ladder: Sequence[Baseline], assets: Sequence[str], origin: s
                 origin=origin,
                 senses_rv=SENSES_RV,
             )
+    if "ev-har" in rungs:
+        rung = rungs["ev-har"]
+        beta = (
+            "{\n"
+            + "".join(
+                f"    {h}: ({', '.join(repr(float(v)) for v in rung.params['overlay'][str(h)]['beta'])}),\n"
+                for h in sorted(map(int, rung.params["overlay"]))
+            )
+            + "}"
+        )
+        programs["ev-har"] = EV_HAR.format(
+            windows=tuple(rung.params["windows"]),
+            coefs=coefficients(rung),
+            beta=beta,
+            nu=_nu(rung.nu),
+            origin=origin,
+            senses_rv=SENSES_RV,
+        )
     return programs

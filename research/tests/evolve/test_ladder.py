@@ -111,3 +111,36 @@ def test_the_ladder_grows_sense_baselines_when_senses_are_there(panel: Panel) ->
     implied = b.implied_hourly_variance(dvol, panel.assets)
     assert np.allclose(implied[3, 60:], implied[0, 60:])  # assets without an index use BTC's
     assert [r.name for r in b.ladder(panel.close, realized_bins(panel, fit), fit, slice(0, 900))][-1] == "har-rv"
+
+
+def test_ev_har_scales_iv_har_by_its_fitted_overlay(panel: Panel) -> None:
+    from laplace_research.data.events import load
+
+    rng = np.random.default_rng(5)
+    r2 = b.hourly_returns(panel.close) ** 2
+    rv = r2 * rng.uniform(0.5, 1.5, r2.shape)
+    dvol = np.full(panel.close.shape, np.nan)
+    dvol[0] = 100 * np.sqrt(b.trailing_mean(r2[0], 168) * b.HOURS_PER_YEAR)
+    fit = sample_times(panel, utc(int(panel.ts[0])), utc(int(panel.ts[-1])), 3)
+    rungs = b.ladder(
+        panel.close,
+        realized_bins(panel, fit),
+        fit,
+        slice(0, 900),
+        senses={"rv": rv, "dvol": dvol},
+        assets=panel.assets,
+        ts=panel.ts,
+    )
+    assert [r.name for r in rungs][-3:] == ["rv-har", "iv-har", "ev-har"]
+    iv, ev = rungs[-2], rungs[-1]
+    times = fit[100:160]
+    ratio = ev.sd(times) / iv.sd(times)
+    for j, h in enumerate(HORIZONS):
+        overlay = ev.params["overlay"][str(h)]
+        x = b.overlay_features(load(), panel.ts[times] + 3600, h)
+        assert len(overlay["beta"]) == len(overlay["inputs"]) == x.shape[1]
+        assert np.allclose(ratio[:, j], np.exp(0.5 * x @ np.array(overlay["beta"]))[None, :])
+    assert np.allclose(ev.probs(times).sum(axis=-1), 1)
+    json.dumps(ev.params)
+    hours = ev.params["overlay"]["1"]["beta"][1:25]
+    assert len(set(hours)) == 24  # every hour of the day is seen in the fit, so each gets its own coefficient

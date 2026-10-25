@@ -102,6 +102,38 @@ def test_parse_refuses_a_day_that_is_both_a_holiday_and_an_early_close() -> None
         events.parse(broken)
 
 
+def test_session_seconds_accumulate_only_while_the_session_is_open(calendar: events.Calendar) -> None:
+    at = np.array([utc(x) for x in ("2026-10-28T13:00", "2026-10-28T13:30", "2026-10-28T16:00", "2026-10-28T23:00")])
+    seconds = calendar.session_seconds(at)
+    assert np.diff(seconds).tolist() == [0.0, 2.5 * HOUR, 4.0 * HOUR]  # 13:30 to 20:00 UTC is the session
+
+
+def test_overlay_inputs_by_hand(calendar: events.Calendar) -> None:
+    from laplace_research.evolve.baselines import overlay_features, overlay_names
+
+    def inputs(at: str, h: int) -> dict[str, float]:
+        x = overlay_features(calendar, np.array([utc(at)]), h)[0]
+        return dict(zip(overlay_names(h), x.tolist(), strict=True))
+
+    noon = inputs("2026-10-28T12:00", 1)  # Wednesday, FOMC at 18:00 UTC, NYSE 13:30 to 20:00 UTC
+    assert noon["hour-12"] == pytest.approx(23 / 24)
+    assert noon["hour-3"] == pytest.approx(-1 / 24)
+    assert [noon[k] for k in ("weekend", "releases", "recent-releases", "upcoming-releases", "us-open")] == [0] * 5
+    four = inputs("2026-10-28T12:00", 4)
+    assert (four["us-open"], four["us-session"], four["upcoming-releases"]) == (1.0, 0.625, 0.0)
+    day = inputs("2026-10-28T12:00", 24)
+    assert (day["releases"], day["us-open"], day["us-session"]) == (1.0, 1.0, pytest.approx(6.5 / 24))
+    assert "hour-12" not in day
+    assert inputs("2026-10-28T17:00", 1)["upcoming-releases"] == 1.0
+    assert inputs("2026-10-28T17:00", 1)["us-session"] == 1.0
+    after = inputs("2026-10-28T20:00", 1)
+    assert (after["recent-releases"], after["us-session"]) == (1.0, 0.0)
+    assert inputs("2026-10-30T12:00", 24)["weekend"] == 0.5  # Friday noon to Saturday noon
+    early = inputs("2024-12-31T12:00", 4)  # before the calendar: only the clock-based inputs remain
+    assert early["hour-12"] == pytest.approx(23 / 24)
+    assert [early[k] for k in ("releases", "us-open", "us-session")] == [0, 0, 0]
+
+
 def test_the_empty_calendar_lists_nothing_and_a_loaded_one_knows_its_file(calendar: events.Calendar) -> None:
     at = utc("2026-10-28T12:00")
     assert events.EMPTY.around(at) == ()
