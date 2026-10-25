@@ -132,3 +132,25 @@ def test_numpy_methods_work_in_a_fresh_worker(panel: Panel, history: Path) -> No
     with Evaluator(history, workers=1) as evaluator:
         outcome = evaluator.run(program, times, 60)
     assert outcome.error is None
+
+
+def test_workers_list_events_from_their_calendar_and_survive_a_broken_one(
+    panel: Panel, history: Path, tmp_path: Path
+) -> None:
+    program = "def forecast(ctx):\n    return [1.0 + len(ctx.events)] + [1.0] * 9\n"
+    times = np.array([900], dtype=np.int64)  # 2025-02-07 12:00 UTC, in the calendar's range
+    with Evaluator(history, workers=1) as evaluator:
+        listed = evaluator.run(program, times, 30)
+    with Evaluator(history, workers=1, calendar=None) as evaluator:
+        unlisted = evaluator.run(program, times, 30)
+    broken = tmp_path / "events.toml"
+    broken.write_text("covers = [")
+    with Evaluator(history, workers=1, calendar=broken) as evaluator:
+        failed = evaluator.run(program, times, 30)
+    assert listed.probs is not None
+    assert unlisted.probs is not None
+    assert listed.probs[0, 0, 0, 0] > 1.0
+    assert unlisted.probs[0, 0, 0, 0] == 1.0
+    assert failed.probs is None
+    assert failed.error is not None
+    assert failed.error.startswith("calendar:")

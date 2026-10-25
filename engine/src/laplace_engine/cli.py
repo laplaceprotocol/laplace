@@ -9,6 +9,7 @@ import logging
 import os
 import sys
 import tempfile
+import threading
 import time
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -17,13 +18,15 @@ from pathlib import Path
 from typing import Any
 
 import httpx
+import numpy as np
 from eth_hash.auto import keccak
 
 from laplace_engine import candles, chain, files, issue, notify, publish, release, settle, verify
 from laplace_research.data import events as calendar_data
 from laplace_research.data.candles import fetch_hourly
 from laplace_research.evolve import senses as sense_data
-from laplace_research.evolve.feed import HORIZONS, product
+from laplace_research.evolve.feed import HORIZONS, FloatArray, product
+from laplace_research.evolve.panel import Panel
 
 log = logging.getLogger("laplace_engine")
 
@@ -196,21 +199,24 @@ def seal_issue(
     panel = candles.wait_for(number, args.data / "candles", deadline=deadline)
     # Senses from third-party APIs: a source that fails leaves its values unknown and raises an alert, never the hour.
     problems: list[str] = []
-    panel = panel.with_senses(sense_data.build(panel, args.data / "senses", problems=problems))
-    for problem in problems:
+    budget = min(SENSES_BUDGET_S, (candles.issue_time(number) + SENSES_BY - datetime.now(UTC)).total_seconds())
+    panel = panel.with_senses(live_senses(panel, args.data / "senses", problems, max(budget, 10.0)))
+    for problem in list(problems):
         alerts.add(f"sense unavailable: {problem}", key=f"sense:{problem.split(':')[0]}", every=HOURS_6)
-    calendar = calendar_data.load()
-    if datetime.fromtimestamp(calendar.end, UTC) - candles.issue_time(number) < CALENDAR_NOTICE:
-        alerts.add(
-            f"the event calendar ends {calendar.last}: extend research/src/laplace_research/data/events.toml",
-            key="calendar",
-            every=timedelta(days=1),
-        )
+    calendar = event_calendar(number, alerts)
     with tempfile.TemporaryDirectory(dir=args.data) as workdir:
-        finals, failures = issue.run_release(rel, panel, Path(workdir), workers=args.workers)
+        finals, failures = issue.run_release(rel, panel, Path(workdir), workers=args.workers, calendar=calendar)
     ledger = issue.Ledger(chain.CHAIN_ID, args.ledger)
     sealed = issue.seal(
-        number, rel, panel, finals, failures, ledger=ledger, commit=issue.engine_commit(), judging=judging
+        number,
+        rel,
+        panel,
+        finals,
+        failures,
+        ledger=ledger,
+        commit=issue.engine_commit(),
+        calendar=calendar,
+        judging=judging,
     )
     files.write_atomic(target / "forecasts.json", sealed.forecasts)
     files.write_atomic(target / "manifest.json", sealed.manifest)
@@ -221,12 +227,52 @@ def seal_issue(
     print(f"issue {number}: {sealed.leaves} forecasts, root 0x{root}, manifest 0x{manifest} ({seconds:.1f}s)")
 
 
+def live_senses(panel: Panel, cache_dir: Path, problems: list[str], budget_s: float) -> dict[str, FloatArray]:
+    """Every sense, or every sense unknown if the sources together take longer than ``budget_s``: however slowly a
+    third-party API answers, the hour is sealed. An abandoned fetch finishes in the background and is ignored."""
+    found: dict[str, FloatArray] = {}
+
+    def fetch() -> None:
+        found.update(sense_data.build(panel, cache_dir, problems=problems))
+
+    thread = threading.Thread(target=fetch, name="senses", daemon=True)
+    thread.start()
+    thread.join(budget_s)
+    if thread.is_alive() or set(found) != set(sense_data.NAMES):
+        problems.append(f"senses: not complete after {budget_s:.0f}s; sealed with every sense unknown")
+        return {name: np.full(panel.close.shape, np.nan) for name in sense_data.NAMES}
+    return dict(found)
+
+
+def event_calendar(number: int, alerts: notify.Alerts) -> calendar_data.Calendar | None:
+    """The scheduled-event calendar, or None (programs then see no events) if it cannot be read: a broken calendar
+    costs an alert, never the hour."""
+    try:
+        calendar = calendar_data.load()
+    except Exception as exc:
+        alerts.add(
+            f"event calendar unreadable; sealed without events: {type(exc).__name__}: {exc}"[:300],
+            key="calendar-broken",
+            every=HOURS_6,
+        )
+        return None
+    if datetime.fromtimestamp(calendar.end, UTC) - candles.issue_time(number) < CALENDAR_NOTICE:
+        alerts.add(
+            f"the event calendar ends {calendar.last}: extend research/src/laplace_research/data/events.toml",
+            key="calendar",
+            every=timedelta(days=1),
+        )
+    return calendar
+
+
 JOURNAL = "commit-tx.json"  # the signed commit transaction's hash, written before it is sent
 GAP = "gap.json"  # an issue whose window closed without a commitment
 CONFLICT = "conflict.json"  # an issue committed with a root other than its local files (never published)
 SOFT_FAILURE = 3  # the run finished but something needed attention, and the operator was alerted
 HOURS_6 = timedelta(hours=6)
 CALENDAR_NOTICE = timedelta(days=60)  # how early to ask for the event calendar to be extended
+SENSES_BUDGET_S = 120.0  # the longest the senses may take; then the hour is sealed with every sense unknown
+SENSES_BY = timedelta(minutes=11)  # and never later than this into the hour, so the commit window stays open
 
 
 def commit_issue(ledger: chain.Ledger, number: int, target: Path, alerts: notify.Alerts) -> bool:

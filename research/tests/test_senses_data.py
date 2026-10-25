@@ -55,3 +55,32 @@ def test_failing_sources_leave_senses_unknown_when_problems_are_collected(monkey
     assert (out["funding"] == 0.0001).all()
     with pytest.raises(ConnectionError):
         senses.build(panel, Path("/nonexistent"))
+
+
+def test_a_source_that_is_down_is_not_asked_again_for_the_other_assets(monkeypatch: pytest.MonkeyPatch) -> None:
+    import httpx
+
+    from laplace_research.evolve import senses
+    from laplace_research.evolve.panel import Panel
+
+    hours = np.arange(H, H + 4 * HOUR, HOUR, dtype=np.int64)
+    ones = np.ones((3, 4))
+    panel = Panel(("BTC", "SOL", "XRP"), hours, ones, ones, ones, ones, ones)
+    calls: dict[str, int] = {"rv": 0, "funding": 0}
+
+    def unreachable(*args: object, **kwargs: object) -> None:
+        calls["rv"] += 1
+        raise httpx.ConnectError("no route")
+
+    def bad_symbol(*args: object, **kwargs: object) -> None:
+        calls["funding"] += 1
+        raise ValueError("unknown symbol")
+
+    monkeypatch.setattr(senses.sources, "realized_hourly", unreachable)
+    monkeypatch.setattr(senses.sources, "dvol_hourly", lambda *a, **k: {})
+    monkeypatch.setattr(senses.sources, "funding_rates", bad_symbol)
+    problems: list[str] = []
+    out = senses.build(panel, Path("/nonexistent"), problems=problems)
+    assert calls == {"rv": 1, "funding": 3}  # an unreachable source once; an asset-level failure for every asset
+    assert "rv: skipped for the remaining assets this hour" in problems
+    assert np.isnan(out["rv"]).all()

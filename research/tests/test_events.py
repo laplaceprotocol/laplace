@@ -100,3 +100,11 @@ def test_parse_refuses_a_day_that_is_both_a_holiday_and_an_early_close() -> None
     broken["nyse"]["early_closes"] = ["2025-01-20"]
     with pytest.raises(ValueError, match="both"):
         events.parse(broken)
+
+
+def test_the_empty_calendar_lists_nothing_and_a_loaded_one_knows_its_file(calendar: events.Calendar) -> None:
+    at = utc("2026-10-28T12:00")
+    assert events.EMPTY.around(at) == ()
+    assert events.EMPTY.count(events.RELEASES, np.array([at]), np.array([at + 24 * HOUR])).tolist() == [0]
+    assert calendar.source == events.DEFAULT
+    assert calendar.raw == events.DEFAULT.read_bytes()

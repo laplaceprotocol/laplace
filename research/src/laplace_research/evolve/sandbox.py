@@ -32,12 +32,13 @@ FORBIDDEN_NAMES = frozenset(
         "help", "input", "locals", "memoryview", "open", "print", "quit", "setattr", "super", "type", "vars",
     }
 )  # fmt: skip
-# Refused on any object: file access, raw memory and buffers, pickling, flag changes and randomness.
+# Refused on any object: file access, raw memory and buffers, pickling, flag changes, randomness, and format strings
+# (str.format walks attributes, private ones included, past every check here; f-strings are checked like code).
 FORBIDDEN_ATTRIBUTES = frozenset(
     {
-        "base", "ctypes", "ctypeslib", "DataSource", "distutils", "dump", "dumps", "f2py", "fromfile", "fromregex",
-        "genfromtxt", "load", "loads", "loadtxt", "memmap", "random", "save", "savetxt", "savez", "savez_compressed",
-        "setflags", "testing", "tofile",
+        "base", "ctypes", "ctypeslib", "DataSource", "distutils", "dump", "dumps", "f2py", "format", "format_map",
+        "fromfile", "fromregex", "genfromtxt", "load", "loads", "loadtxt", "memmap", "random", "save", "savetxt",
+        "savez", "savez_compressed", "setflags", "testing", "tofile",
     }
 )  # fmt: skip
 # Refused when reached from a module (``numpy.lib`` holds stride tricks and file I/O); ``ctx.lib`` stays allowed.
