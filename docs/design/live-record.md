@@ -8,8 +8,9 @@ chain, and score the forecasts once they settle. Code: `engine/` ([README](../..
 
 ## An hour
 1. **:00:30 UTC.** The engine fetches the last 744 hourly candles of every asset and waits until the candle that
-   closed at the top of the hour is published for all of them, and the exchange has opened the new hour by its own
-   clock (at most until :10).
+   closed at the top of the hour is published for all of them and the exchange has opened the new hour (at most until
+   :10). If the exchange's candle feed lags past :05, its own clock vouches that the hour has closed, and the candles
+   available then are used: the committed last candle is the definitive starting price.
 2. **Forecasts.** Every program of the release runs once per question in a fresh process that only ever reads the
    720 candles before the issue time (the same sandbox and past-only reader as in research). A program that fails
    is listed in the manifest and has no forecasts that hour; a pool needs all its members.
@@ -30,6 +31,10 @@ reply, a crash) is recovered from the chain and published; one that never reache
 isolated, so a failure in one (an exchange outage during settlement, say) never stops the others, and anything left
 undone is retried on the next run, however old. Files are only published if they rebuild exactly the committed root
 and manifest hash.
+
+The operator is alerted on Telegram whenever a run needs attention, and receives a daily digest; an off-box
+dead-man's switch on Cloudflare (`ops/watch`) checks the public record every hour, so even a dead engine host is
+noticed within the hour.
 
 An issue is numbered by its hour: hours since the Unix epoch (issue 498,019 is 2026-10-24 19:00 UTC).
 
