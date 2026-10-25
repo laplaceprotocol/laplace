@@ -226,10 +226,111 @@ def har(close: FloatArray, realized_fit: IntArray, fit_times: IntArray) -> Basel
     return Baseline("har-rv", sd, _fit_nu(sd, realized_fit, fit_times), params)
 
 
-def ladder(close: FloatArray, realized_fit: IntArray, fit_times: IntArray, fit_range: slice) -> list[Baseline]:
-    return [
+HOURS_PER_YEAR = 365 * 24
+
+
+def implied_hourly_variance(dvol: FloatArray, assets: tuple[str, ...]) -> FloatArray:
+    """Hourly variance implied by DVOL (annualized percent): the asset's own index, else BTC's as the market's."""
+    market = dvol[assets.index("BTC")]
+    own_or_market = np.where(np.isfinite(dvol), dvol, market[None, :])
+    out: FloatArray = (own_or_market / 100) ** 2 / HOURS_PER_YEAR
+    return out
+
+
+def _regression_baseline(
+    name: str,
+    close: FloatArray,
+    features: FloatArray,
+    floor: FloatArray,
+    realized_fit: IntArray,
+    fit_times: IntArray,
+    params: dict[str, Any],
+    forecast_features: FloatArray | None = None,
+) -> Baseline:
+    """A baseline whose h-hour variance is ``c0 + h * sum(c_k * features_k)``, fitted by least squares on the realized
+    squared hourly returns over the horizon (the question's own variance), floored at ``floor * h``. Fit rows with a
+    missing feature are skipped; forecasts use ``forecast_features`` (the same features with gaps filled) if given."""
+    r2 = hourly_returns(close) ** 2
+    future = np.cumsum(r2, axis=1)
+    coefs: dict[tuple[int, int], FloatArray] = {}
+    for a in range(r2.shape[0]):
+        for h in HORIZONS:
+            t = fit_times[np.isfinite(features[a, fit_times]).all(axis=1)]
+            y = future[a, t + h] - future[a, t]
+            x = np.column_stack([np.ones(len(t)), features[a, t] * h])
+            coefs[a, h], *_ = np.linalg.lstsq(x, y, rcond=None)
+
+    at_forecast = features if forecast_features is None else forecast_features
+
+    def sd(times: IntArray) -> FloatArray:
+        out = np.empty((r2.shape[0], len(HORIZONS), len(times)))
+        for a in range(r2.shape[0]):
+            for j, h in enumerate(HORIZONS):
+                x = np.column_stack([np.ones(len(times)), at_forecast[a, times] * h])
+                variance = np.nan_to_num(x @ coefs[a, h], nan=0.0)
+                out[a, j] = np.sqrt(np.maximum(variance, floor[a, times] * h))
+        return out
+
+    params = params | {
+        "per_asset": [{str(h): [float(c) for c in coefs[a, h]] for h in HORIZONS} for a in range(r2.shape[0])]
+    }
+    return Baseline(name, sd, _fit_nu(sd, realized_fit, fit_times), params)
+
+
+def rv_har(close: FloatArray, rv: FloatArray, realized_fit: IntArray, fit_times: IntArray) -> Baseline:
+    """HAR on intraday realized variance: the 1-, 24-, 168- and 720-hour means of 5-minute realized variance (hours
+    without it use the squared hourly return), floored at a tenth of the weekly mean."""
+    r2 = hourly_returns(close) ** 2
+    filled = np.where(np.isfinite(rv), rv, r2)
+    features = np.stack([trailing_mean(filled, w) for w in HAR_WINDOWS], axis=-1)
+    params = {"windows": list(HAR_WINDOWS), "features": "trailing means of 5-minute realized variance"}
+    return _regression_baseline("rv-har", close, features, 0.1 * features[..., 2], realized_fit, fit_times, params)
+
+
+def iv_har(
+    close: FloatArray,
+    rv: FloatArray,
+    dvol: FloatArray,
+    assets: tuple[str, ...],
+    realized_fit: IntArray,
+    fit_times: IntArray,
+) -> Baseline:
+    """RV-HAR plus the hourly variance implied by DVOL (own index for BTC and ETH, BTC's for the others)."""
+    r2 = hourly_returns(close) ** 2
+    filled = np.where(np.isfinite(rv), rv, r2)
+    windows = np.stack([trailing_mean(filled, w) for w in HAR_WINDOWS], axis=-1)
+    implied = implied_hourly_variance(dvol, assets)
+    features = np.concatenate([windows, implied[..., None]], axis=-1)
+    # Where no index is known at forecast time, the month's realized variance stands in for the implied one.
+    filled = np.concatenate([windows, np.where(np.isfinite(implied), implied, windows[..., 3])[..., None]], axis=-1)
+    params = {
+        "windows": list(HAR_WINDOWS),
+        "features": "trailing means of 5-minute realized variance, then DVOL-implied hourly variance",
+    }
+    return _regression_baseline(
+        "iv-har", close, features, 0.1 * windows[..., 2], realized_fit, fit_times, params, forecast_features=filled
+    )
+
+
+def ladder(
+    close: FloatArray,
+    realized_fit: IntArray,
+    fit_times: IntArray,
+    fit_range: slice,
+    *,
+    senses: dict[str, FloatArray] | None = None,
+    assets: tuple[str, ...] | None = None,
+) -> list[Baseline]:
+    """The classical ladder; with senses, also RV-HAR (needs ``rv``) and IV-HAR (also needs ``dvol`` and ``assets``)."""
+    rungs = [
         naive(close),
         ewma(close, realized_fit, fit_times),
         garch(close, realized_fit, fit_times, fit_range),
         har(close, realized_fit, fit_times),
     ]
+    senses = senses or {}
+    if "rv" in senses:
+        rungs.append(rv_har(close, senses["rv"], realized_fit, fit_times))
+        if "dvol" in senses and assets is not None:
+            rungs.append(iv_har(close, senses["rv"], senses["dvol"], assets, realized_fit, fit_times))
+    return rungs
