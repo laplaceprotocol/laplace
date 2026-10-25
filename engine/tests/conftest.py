@@ -42,3 +42,11 @@ def panel() -> Panel:
 @pytest.fixture
 def make_panel() -> Callable[..., Panel]:
     return synthetic_panel
+
+
+@pytest.fixture(autouse=True)
+def no_live_senses(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Tests never reach third-party APIs: live senses are empty unless a test provides them."""
+    from laplace_engine import cli
+
+    monkeypatch.setattr(cli.sense_data, "build", lambda panel, cache_dir, **kwargs: {})

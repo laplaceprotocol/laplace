@@ -140,17 +140,31 @@ def engine_commit() -> str | None:
     return commit + ("-dirty" if dirty else "")
 
 
+def _number(value: float) -> float | None:
+    """JSON has no NaN: unknown values are written as null."""
+    return float(value) if np.isfinite(value) else None
+
+
 def inputs(panel: Panel) -> dict[str, Any]:
-    """What the programs saw: the last ``LOOKBACK`` candles, identified by hash, and the last candle in full."""
-    window = np.stack([getattr(panel, f)[:, -LOOKBACK:] for f in FIELDS], axis=-1).transpose(1, 0, 2)
-    return {
+    """What the programs saw: the last ``LOOKBACK`` hours of candles and senses, identified by hash, and the last
+    hour in full."""
+    names = sorted(panel.senses)
+    series = [getattr(panel, f)[:, -LOOKBACK:] for f in FIELDS] + [panel.senses[n][:, -LOOKBACK:] for n in names]
+    window = np.stack(series, axis=-1).transpose(1, 0, 2)
+    fields = ", ".join(FIELDS) + (f", then the senses {', '.join(names)}" if names else "")
+    out: dict[str, Any] = {
         "candles": LOOKBACK,
         "first_open": iso(int(panel.ts[-LOOKBACK])),
         "last_open": iso(int(panel.ts[-1])),
         "keccak256": hex32(bytes(keccak(np.ascontiguousarray(window, dtype="<f8").tobytes()))),
-        "keccak256_layout": "little-endian float64, ordered hour, asset, field (open, high, low, close, volume)",
+        "keccak256_layout": f"little-endian float64, ordered hour, asset, field ({fields})",
         "last_candle": {a: [float(getattr(panel, f)[i, -1]) for f in FIELDS] for i, a in enumerate(panel.assets)},
     }
+    if names:
+        out["last_senses"] = {
+            a: {n: _number(panel.senses[n][i, -1]) for n in names} for i, a in enumerate(panel.assets)
+        }
+    return out
 
 
 def seal(

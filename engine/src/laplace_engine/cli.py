@@ -21,6 +21,7 @@ from eth_hash.auto import keccak
 
 from laplace_engine import candles, chain, files, issue, notify, publish, release, settle, verify
 from laplace_research.data.candles import fetch_hourly
+from laplace_research.evolve import senses as sense_data
 from laplace_research.evolve.feed import HORIZONS, product
 
 log = logging.getLogger("laplace_engine")
@@ -47,6 +48,11 @@ def build_parser() -> argparse.ArgumentParser:
     extend.add_argument("--name", required=True)
     extend.add_argument("--out", type=Path, required=True)
     extend.add_argument("--workers", type=int, default=min(8, os.cpu_count() or 1))
+    extend.add_argument(
+        "--sense-baselines", action="store_true", help="also add RV-HAR and IV-HAR fitted on the run's search window"
+    )
+    extend.add_argument("--global-pool", default="demon-plus", help="name of the pool with one set of weights")
+    extend.add_argument("--horizon-pool", default="demon-h", help="name of the pool with weights per horizon")
 
     seal = sub.add_parser("issue", help="seal the current (or a given) issue; optionally commit and publish it")
     seal.add_argument("--release", type=Path, required=True)
@@ -128,11 +134,14 @@ def cmd_extend(args: argparse.Namespace) -> int:
     from laplace_engine import baselines, fit
 
     base = release.load(args.source, args.private)
-    monkey = release.Program("monkey", baselines.MONKEY, True, "baseline: equal odds on every bin")
-    programs = (*base.programs, monkey)
+    programs: tuple[release.Program, ...] = base.programs
+    if "monkey" not in {p.name for p in programs}:
+        programs = (*programs, release.Program("monkey", baselines.MONKEY, True, "baseline: equal odds on every bin"))
+    if args.sense_baselines:
+        programs = (*programs, *fit.sense_baselines(args.run))
     windows = fit.run_windows(args.run, programs, workers=args.workers)
     everyone = {p.name: windows.validation[p.name] for p in programs}
-    plus = release.Pool("demon-plus", fit.fit_weights(everyone, windows.realized_validation, HORIZONS))
+    plus = release.Pool(args.global_pool, fit.fit_weights(everyone, windows.realized_validation, HORIZONS))
     by_horizon = tuple((h, fit.fit_weights(everyone, windows.realized_validation, (h,))) for h in HORIZONS)
     notes = (
         f"{base.name}'s forecasters unchanged, plus shadow forecasters: the monkey (equal odds on every bin) and "
@@ -144,7 +153,7 @@ def cmd_extend(args: argparse.Namespace) -> int:
     program_ids = {p.name: p.id for p in programs}
     taken = set(program_ids.values()) | {pool.id(program_ids) for pool in base.pools}
     new_pools: list[release.AnyPool] = []
-    for pool in (plus, release.HorizonPool("demon-h", by_horizon)):
+    for pool in (plus, release.HorizonPool(args.horizon_pool, by_horizon)):
         if pool.id(program_ids) in taken:
             log.warning("%s fits to the same weights as an existing forecaster; left out", pool.name)
             continue
@@ -174,7 +183,9 @@ def cmd_extend(args: argparse.Namespace) -> int:
     return 0
 
 
-def seal_issue(args: argparse.Namespace, number: int, target: Path, judging: list[dict[str, str]]) -> None:
+def seal_issue(
+    args: argparse.Namespace, number: int, target: Path, judging: list[dict[str, str]], alerts: notify.Alerts
+) -> None:
     started = time.monotonic()
     rel = release.load(args.release, args.private)
     args.data.mkdir(parents=True, exist_ok=True)
@@ -182,6 +193,11 @@ def seal_issue(args: argparse.Namespace, number: int, target: Path, judging: lis
     now = datetime.now(UTC)
     deadline = max(candles.issue_time(number) + timedelta(minutes=args.wait_minutes), now + timedelta(minutes=1))
     panel = candles.wait_for(number, args.data / "candles", deadline=deadline)
+    # Senses from third-party APIs: a source that fails leaves its values unknown and raises an alert, never the hour.
+    problems: list[str] = []
+    panel = panel.with_senses(sense_data.build(panel, args.data / "senses", problems=problems))
+    for problem in problems:
+        alerts.add(f"sense unavailable: {problem}", key=f"sense:{problem.split(':')[0]}", every=HOURS_6)
     with tempfile.TemporaryDirectory(dir=args.data) as workdir:
         finals, failures = issue.run_release(rel, panel, Path(workdir), workers=args.workers)
     ledger = issue.Ledger(chain.CHAIN_ID, args.ledger)
@@ -324,7 +340,7 @@ def run_issue(args: argparse.Namespace) -> int:
         log.info("issue %d is already sealed", number)  # never reseal: what may be committed is on disk
     else:
         try:
-            seal_issue(args, number, target, judging_entries(args.judging, alerts))
+            seal_issue(args, number, target, judging_entries(args.judging, alerts), alerts)
             for name, error in json.loads((target / "manifest.json").read_bytes())["failed"].items():
                 alerts.add(f"{name} produced no forecast: {error}"[:300], key=f"forecaster:{name}", every=HOURS_6)
         except Exception as exc:
