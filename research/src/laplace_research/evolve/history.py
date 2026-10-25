@@ -15,7 +15,7 @@ import numpy as np
 
 from laplace_research.evolve.context import LOOKBACK, Candles, Context, make_context
 from laplace_research.evolve.feed import FloatArray, IntArray
-from laplace_research.evolve.panel import Panel
+from laplace_research.evolve.panel import Panel, senses_path
 
 FIELDS = ("open", "high", "low", "close", "volume")
 
@@ -26,16 +26,28 @@ def history_paths(panel_path: Path) -> tuple[Path, Path]:
 
 
 def write_history(panel: Panel, panel_path: Path) -> tuple[Path, Path]:
+    """Candle fields first, then the panel's senses in name order, for every hour and asset."""
     data_path, meta_path = history_paths(panel_path)
-    rows = np.stack([getattr(panel, f) for f in FIELDS], axis=-1)  # [asset, hour, field]
-    data_path.write_bytes(np.ascontiguousarray(rows.transpose(1, 0, 2), dtype="<f8").tobytes())
-    np.savez(meta_path, assets=np.array(panel.assets), ts=panel.ts)
+    names = sorted(panel.senses)
+    rows = np.stack([getattr(panel, f) for f in FIELDS] + [panel.senses[n] for n in names], axis=-1)
+    data_path.write_bytes(np.ascontiguousarray(rows.transpose(1, 0, 2), dtype="<f8").tobytes())  # [hour, asset, field]
+    np.savez(meta_path, assets=np.array(panel.assets), ts=panel.ts, senses=np.array(names, dtype=str))
     return data_path, meta_path
 
 
+def _sense_names(meta_path: Path) -> list[str]:
+    with np.load(meta_path) as meta:
+        return [str(n) for n in meta["senses"]] if "senses" in meta.files else []
+
+
 def ensure_history(panel_path: Path) -> tuple[Path, Path]:
+    """The history files, rewritten if missing or if the panel's senses changed since they were written."""
     data_path, meta_path = history_paths(panel_path)
-    if not (data_path.exists() and meta_path.exists()):
+    expected: list[str] = []
+    if senses_path(panel_path).exists():
+        with np.load(senses_path(panel_path)) as data:
+            expected = sorted(data.files)
+    if not (data_path.exists() and meta_path.exists()) or _sense_names(meta_path) != expected:
         write_history(Panel.load(panel_path), panel_path)
     return data_path, meta_path
 
@@ -47,10 +59,12 @@ class HistoryReader:
         with np.load(meta_path) as meta:
             self.assets: tuple[str, ...] = tuple(str(a) for a in meta["assets"])
             self.ts: IntArray = meta["ts"].astype(np.int64)
+            self.senses: tuple[str, ...] = tuple(str(n) for n in meta["senses"]) if "senses" in meta.files else ()
+        width = len(FIELDS) + len(self.senses)
         self._data_path = data_path
-        self._buffer: FloatArray = np.zeros((len(self.ts), len(self.assets), len(FIELDS)))
+        self._buffer: FloatArray = np.zeros((len(self.ts), len(self.assets), width))
         self._buffer.flags.writeable = False
-        self._row_bytes = len(self.assets) * len(FIELDS) * 8
+        self._row_bytes = len(self.assets) * width * 8
         self._loaded = 0
 
     @property
@@ -82,4 +96,8 @@ class HistoryReader:
             raise ValueError("not enough history for a context")
         window = self._buffer[t + 1 - LOOKBACK : t + 1]  # [hour, asset, field]
         peers = {name: Candles(*(window[:, i, k] for k in range(len(FIELDS)))) for i, name in enumerate(self.assets)}
-        return make_context(peers, self.assets[asset_index], horizon, int(self.ts[t]))
+        senses = {
+            name: {sense: window[:, i, len(FIELDS) + j] for j, sense in enumerate(self.senses)}
+            for i, name in enumerate(self.assets)
+        }
+        return make_context(peers, self.assets[asset_index], horizon, int(self.ts[t]), senses)

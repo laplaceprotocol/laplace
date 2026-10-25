@@ -6,6 +6,8 @@ import argparse
 import os
 from pathlib import Path
 
+import numpy as np
+
 from laplace_research import __version__
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -27,7 +29,7 @@ def build_parser() -> argparse.ArgumentParser:
     majors.add_argument("--agents", help="comma-separated model/directive ids (default: all)")
 
     evolve = sub.add_parser("evolve", help="evolutionary search over forecasting programs (PoC 2)")
-    evolve.add_argument("action", choices=["init", "run", "report"])
+    evolve.add_argument("action", choices=["init", "run", "report", "senses"])
     evolve.add_argument("--run-id", required=True)
     evolve.add_argument("--generations", type=int, default=4)
     evolve.add_argument("--children", type=int, default=2, help="children per island per generation")
@@ -70,6 +72,14 @@ def main(argv: list[str] | None = None) -> int:
         run_dir = RUNS / f"evolve-{args.run_id}"
         if args.action == "init":
             Run.init(run_dir, CACHE / "candles")
+        elif args.action == "senses":
+            from laplace_research.evolve import senses
+            from laplace_research.evolve.panel import Panel
+
+            panel = Panel.load(run_dir / "panel.npz")
+            panel.with_senses(senses.build(panel, CACHE / "senses")).save(run_dir / "panel.npz")
+            for name, values in Panel.load(run_dir / "panel.npz").senses.items():
+                print(f"{name}: {np.isfinite(values).mean(axis=1).round(3).tolist()} of hours known, per asset")
         elif args.action == "run":
             asyncio.run(Run(run_dir).evolve(args.generations, args.children, args.workers))
         else:

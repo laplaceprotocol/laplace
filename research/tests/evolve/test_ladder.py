@@ -89,3 +89,25 @@ def test_fitted_parameters_reproduce_the_forecasts(panel: Panel) -> None:
             c = np.asarray(by_horizon[str(h)])
             variance = max(c[0] + float(c[1:] @ features[a]) * h, 0.1 * features[a, 2] * h)
             assert rungs["har-rv"].sd(t)[a, j, 0] == pytest.approx(np.sqrt(variance))
+
+
+def test_the_ladder_grows_sense_baselines_when_senses_are_there(panel: Panel) -> None:
+    rng = np.random.default_rng(5)
+    r2 = b.hourly_returns(panel.close) ** 2
+    rv = r2 * rng.uniform(0.5, 1.5, r2.shape)  # an intraday measure: the hourly variance, measured with noise
+    dvol = np.full(panel.close.shape, np.nan)
+    dvol[0] = 100 * np.sqrt(b.trailing_mean(r2[0], 168) * b.HOURS_PER_YEAR)  # an implied index for BTC only
+    dvol[0, :50] = np.nan  # the index starts later than the candles
+    fit = sample_times(panel, utc(int(panel.ts[0])), utc(int(panel.ts[-1])), 3)
+    rungs = b.ladder(
+        panel.close, realized_bins(panel, fit), fit, slice(0, 900), senses={"rv": rv, "dvol": dvol}, assets=panel.assets
+    )
+    assert [r.name for r in rungs][-2:] == ["rv-har", "iv-har"]
+    for rung in rungs[-2:]:
+        p = rung.probs(fit[:20])
+        assert np.isfinite(p).all()
+        assert np.allclose(p.sum(axis=-1), 1)
+        json.dumps(rung.params)
+    implied = b.implied_hourly_variance(dvol, panel.assets)
+    assert np.allclose(implied[3, 60:], implied[0, 60:])  # assets without an index use BTC's
+    assert [r.name for r in b.ladder(panel.close, realized_bins(panel, fit), fit, slice(0, 900))][-1] == "har-rv"

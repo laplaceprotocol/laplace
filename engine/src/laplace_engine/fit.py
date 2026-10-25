@@ -101,3 +101,24 @@ def compare(
                 row[scope] = {"mean": float(np.mean(series)), "interval95": interval(series, indices)}
             out[name][opponent] = row
     return out
+
+
+def sense_baselines(run_dir: Path) -> list[Program]:
+    """RV-HAR and IV-HAR as programs, with parameters fitted on the run's search window (needs a panel with senses)."""
+    from laplace_engine.baselines import ladder_programs
+    from laplace_research.evolve.baselines import ladder
+    from laplace_research.evolve.run import parse_utc
+
+    run = Run(run_dir)
+    config, panel = run.config, run.panel
+    if "rv" not in panel.senses:
+        raise ValueError(f"{run_dir.name}'s panel has no senses: run `laplace-research evolve senses` first")
+    fit = config.fit_times(panel)
+    start, end, _ = config.search
+    fit_range = slice(panel.index_at_or_after(parse_utc(start)), panel.index_at_or_after(parse_utc(end)))
+    rungs = ladder(
+        panel.close, realized_bins(panel, fit.times), fit.times, fit_range, senses=panel.senses, assets=panel.assets
+    )
+    where = f"{run_dir.name}'s search window ({start[:10]} to {end[:10]})"
+    sources = ladder_programs(rungs, panel.assets, where)
+    return [Program(n, sources[n], True, f"baseline fitted on {where}") for n in ("rv-har", "iv-har") if n in sources]

@@ -3,6 +3,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
+import numpy as np
 import pytest
 from eth_hash.auto import keccak
 
@@ -118,3 +119,19 @@ def test_a_per_horizon_pool_is_sealed_and_recomputed_exactly(tmp_path: Path, mak
     last["bps"][4], last["bps"][5] = last["bps"][4] + 1, last["bps"][5] - 1
     with pytest.raises(VerificationError):
         verify(sealed.manifest, json.dumps(body).encode())
+
+
+def test_inputs_record_the_senses_programs_saw(make_panel: Callable[..., Panel]) -> None:
+    from laplace_engine.issue import inputs
+
+    panel = make_panel()
+    rv = np.full(panel.close.shape, 1e-5)
+    rv[1, -1] = np.nan
+    with_senses = panel.with_senses({"rv": rv})
+    plain, sensed = inputs(panel), inputs(with_senses)
+    assert "last_senses" not in plain
+    assert sensed["keccak256"] != plain["keccak256"]
+    assert sensed["keccak256_layout"].endswith("volume, then the senses rv)")
+    assert sensed["last_senses"]["BTC"] == {"rv": 1e-5}
+    assert sensed["last_senses"]["ETH"] == {"rv": None}  # unknown, and JSON has no NaN
+    json.dumps(sensed, allow_nan=False)

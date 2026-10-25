@@ -1,10 +1,12 @@
-"""An aligned, read-only panel of hourly candles for every feed asset."""
+"""An aligned, read-only panel of hourly candles for every feed asset, with optional senses (other data aligned to
+the same hours, see ``evolve.senses``), kept in a separate file next to the panel."""
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 
 import httpx
 import numpy as np
@@ -29,26 +31,48 @@ class Panel:
     low: FloatArray
     close: FloatArray
     volume: FloatArray
+    senses: dict[str, FloatArray] = field(default_factory=dict)  # name -> [asset, t], NaN where unknown
 
     def __post_init__(self) -> None:
         for name in FIELDS:
             getattr(self, name).flags.writeable = False
         self.ts.flags.writeable = False
+        for name, values in self.senses.items():
+            if values.shape != self.close.shape:
+                raise ValueError(f"sense {name} is not aligned to the panel")
+            values.flags.writeable = False
+
+    def with_senses(self, senses: dict[str, FloatArray]) -> Panel:
+        return replace(self, senses=senses)
 
     def index_at_or_after(self, when: datetime) -> int:
         return int(np.searchsorted(self.ts, int(when.timestamp())))
 
     def save(self, path: Path) -> None:
         np.savez_compressed(path, assets=np.array(self.assets), ts=self.ts, **{f: getattr(self, f) for f in FIELDS})
+        if self.senses:
+            arrays: dict[str, Any] = dict(self.senses)  # a **dict of arrays reads to the stubs like allow_pickle
+            np.savez_compressed(senses_path(path), **arrays)
 
     @classmethod
     def load(cls, path: Path) -> Panel:
+        senses: dict[str, FloatArray] = {}
+        if senses_path(path).exists():
+            with np.load(senses_path(path)) as data:
+                senses = {name: data[name].astype(np.float64) for name in data.files}
         with np.load(path) as data:
+            candles: dict[str, Any] = {f: data[f].astype(np.float64) for f in FIELDS}
             return cls(
                 assets=tuple(str(a) for a in data["assets"]),
                 ts=data["ts"].astype(np.int64),
-                **{f: data[f].astype(np.float64) for f in FIELDS},
+                senses=senses,
+                **candles,
             )
+
+
+def senses_path(panel_path: Path) -> Path:
+    """Where a panel's senses are kept: a file next to it, so a panel's own file never changes when senses are added."""
+    return panel_path.with_name(panel_path.stem + ".senses.npz")
 
 
 def build(start: datetime, end: datetime, cache_dir: Path, *, assets: tuple[str, ...] = ASSETS) -> Panel:
@@ -66,7 +90,9 @@ def build(start: datetime, end: datetime, cache_dir: Path, *, assets: tuple[str,
     gaps = int(np.count_nonzero(np.diff(common) != HOUR))
     if gaps:
         raise ValueError(f"assets do not share a contiguous range of hours ({gaps} breaks)")
-    arrays = {f: np.array([[getattr(series[a][ts], f) for ts in common] for a in assets]) for f in FIELDS}
+    arrays: dict[str, Any] = {
+        f: np.array([[getattr(series[a][ts], f) for ts in common] for a in assets]) for f in FIELDS
+    }
     return Panel(assets=assets, ts=np.array(common, dtype=np.int64), **arrays)
 
 
