@@ -1,0 +1,110 @@
+import tomllib
+from datetime import UTC, datetime
+from typing import Any
+
+import numpy as np
+import pytest
+
+from laplace_research.data import events
+
+HOUR = 3600
+
+
+def utc(text: str) -> int:
+    return int(datetime.fromisoformat(text).replace(tzinfo=UTC).timestamp())
+
+
+@pytest.fixture(scope="module")
+def calendar() -> events.Calendar:
+    return events.load()
+
+
+def times_of(calendar: events.Calendar, kind: str) -> set[int]:
+    return {int(t) for t, k in zip(calendar.times, calendar.kinds, strict=True) if k == kind}
+
+
+def spec() -> dict[str, Any]:
+    out: dict[str, Any] = tomllib.loads(events.DEFAULT.read_text())
+    return out
+
+
+def test_the_calendar_holds_every_listed_release_in_time_order(calendar: events.Calendar) -> None:
+    counts = {kind: calendar.kinds.count(kind) for kind in events.KINDS}
+    assert (counts["fomc"], counts["cpi"], counts["nfp"]) == (24, 35, 35)
+    assert counts["us-open"] == counts["us-close"] > 700
+    assert np.all(np.diff(calendar.times) >= 0)
+
+
+def test_eastern_times_follow_daylight_saving(calendar: events.Calendar) -> None:
+    assert utc("2025-01-15T13:30") in times_of(calendar, "cpi")  # 8:30 a.m. EST
+    assert utc("2025-06-11T12:30") in times_of(calendar, "cpi")  # 8:30 a.m. EDT
+    assert utc("2026-10-28T18:00") in times_of(calendar, "fomc")  # 2:00 p.m., still EDT
+    assert utc("2026-12-09T19:00") in times_of(calendar, "fomc")  # 2:00 p.m. EST
+    opens = times_of(calendar, "us-open")
+    assert utc("2026-10-30T13:30") in opens  # the Friday before daylight saving ends on 2026-11-01
+    assert utc("2026-11-02T14:30") in opens  # the Monday after
+
+
+def test_the_session_skips_weekends_and_holidays_and_closes_early(calendar: events.Calendar) -> None:
+    opens, closes = times_of(calendar, "us-open"), times_of(calendar, "us-close")
+    assert utc("2025-01-09T14:30") not in opens  # closed for the national day of mourning
+    assert utc("2026-11-26T14:30") not in opens  # Thanksgiving
+    assert utc("2026-10-31T13:30") not in opens  # a Saturday
+    assert utc("2026-11-27T18:00") in closes  # the day after Thanksgiving closes at 1:00 p.m.
+    assert utc("2026-11-27T21:00") not in closes
+    assert utc("2026-11-25T21:00") in closes  # an ordinary day closes at 4:00 p.m.
+
+
+def test_around_lists_events_in_hours_from_the_forecast_time(calendar: events.Calendar) -> None:
+    at = utc("2026-10-28T12:00")
+    around = calendar.around(at)
+    assert (6.0, "fomc") in around
+    assert (1.5, "us-open") in around
+    assert (-16.0, "us-close") in around  # 4:00 p.m. the day before
+    assert [h for h, _ in around] == sorted(h for h, _ in around)
+    assert all(-events.BEFORE_HOURS <= h < events.AFTER_HOURS for h, _ in around)
+    assert (-24.0, "fomc") in calendar.around(at + 30 * HOUR)  # the start of the window is included
+    assert all(k != "fomc" for _, k in calendar.around(at - 42 * HOUR))  # 48 hours ahead is not
+
+
+def test_around_is_empty_where_the_calendar_does_not_reach(calendar: events.Calendar) -> None:
+    assert calendar.around(utc("2024-12-31T12:00")) == ()
+    assert calendar.around(utc("2027-12-30T12:00")) == ()
+    assert calendar.around(utc("2027-12-28T12:00")) != ()
+
+
+def test_count_counts_events_of_some_kinds_in_half_open_windows(calendar: events.Calendar) -> None:
+    lo = np.array([utc("2026-10-28T12:00"), utc("2026-10-28T18:00"), utc("2026-10-28T19:00")])
+    assert calendar.count(events.RELEASES, lo, lo + HOUR).tolist() == [0, 1, 0]
+    assert calendar.count(events.RELEASES, lo, lo + 7 * HOUR).tolist() == [1, 1, 0]
+    assert calendar.count(("us-open",), lo, lo + 24 * HOUR).tolist() == [1, 1, 1]
+
+
+@pytest.mark.parametrize(
+    ("section", "key", "value", "message"),
+    [
+        ("cpi", "dates", ["2025-01-15", "2028-01-12"], "outside the covered range"),
+        ("nfp", "dates", ["2025-01-11"], "weekend"),
+        ("fomc", "dates", ["2025-03-19", "2025-01-29"], "ascending"),
+    ],
+)
+def test_parse_refuses_impossible_dates(section: str, key: str, value: list[str], message: str) -> None:
+    broken = spec()
+    broken[section][key] = value
+    with pytest.raises(ValueError, match=message):
+        events.parse(broken)
+
+
+def test_parse_refuses_a_day_that_is_both_a_holiday_and_an_early_close() -> None:
+    broken = spec()
+    broken["nyse"]["early_closes"] = ["2025-01-20"]
+    with pytest.raises(ValueError, match="both"):
+        events.parse(broken)
+
+
+def test_the_empty_calendar_lists_nothing_and_a_loaded_one_knows_its_file(calendar: events.Calendar) -> None:
+    at = utc("2026-10-28T12:00")
+    assert events.EMPTY.around(at) == ()
+    assert events.EMPTY.count(events.RELEASES, np.array([at]), np.array([at + 24 * HOUR])).tolist() == [0]
+    assert calendar.source == events.DEFAULT
+    assert calendar.raw == events.DEFAULT.read_bytes()

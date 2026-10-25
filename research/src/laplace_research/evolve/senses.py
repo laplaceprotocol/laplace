@@ -51,21 +51,29 @@ def build(
     """Every sense for every asset and hour of ``panel``.
 
     With ``problems``, a source that fails for an asset leaves that sense unknown (NaN) and is reported there instead
-    of raising: the live engine must seal its hour whatever a third-party API does.
+    of raising: the live engine must seal its hour whatever a third-party API does. A source that is unreachable or
+    keeps throttling is not asked again for the remaining assets.
     """
     start, end = utc(int(panel.ts[0])), utc(int(panel.ts[-1]) + HOUR)
     out = {name: np.full((len(panel.assets), len(panel.ts)), np.nan) for name in NAMES}
     own_client = client is None
     client = client or httpx.Client(timeout=30.0, headers={"User-Agent": "laplace-research"})
 
+    down: set[str] = set()
+
     def attempt(name: str, asset: str, fill: Callable[[], None]) -> None:
         if problems is None:
             fill()
+            return
+        if name in down:
             return
         try:
             fill()
         except Exception as exc:
             problems.append(f"{name} for {asset}: {type(exc).__name__}: {exc}"[:200])
+            if isinstance(exc, httpx.TransportError | sources.SourceUnavailable):
+                down.add(name)
+                problems.append(f"{name}: skipped for the remaining assets this hour")
 
     try:
         for i, asset in enumerate(panel.assets):

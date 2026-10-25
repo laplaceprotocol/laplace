@@ -22,6 +22,7 @@ from laplace_engine import __version__
 from laplace_engine.quantize import mix_basis_points, to_basis_points
 from laplace_engine.record import Leaf, Tree
 from laplace_engine.release import Release, canonical, hex32
+from laplace_research.data import events as calendar_data
 from laplace_research.data.candles import HOUR
 from laplace_research.evolve.context import LOOKBACK
 from laplace_research.evolve.evaluate import Evaluator
@@ -43,6 +44,7 @@ QUESTION = (
     "of the horizon, in percent of log return); the first and last bins are open."
 )
 PRICES = "Coinbase Exchange hourly candles for <asset>-USD; an hour without trades repeats the previous close."
+CALENDAR = "research/src/laplace_research/data/events.toml"  # where the scheduled events come from, in the repository
 
 Forecasts = dict[str, list[list[tuple[int, ...]]]]  # forecaster -> [asset][horizon index] -> bps
 
@@ -68,18 +70,26 @@ class Sealed:
 
 
 def run_release(
-    release: Release, panel: Panel, workdir: Path, *, workers: int, time_limit_s: int = TIME_LIMIT_S
+    release: Release,
+    panel: Panel,
+    workdir: Path,
+    *,
+    workers: int,
+    calendar: calendar_data.Calendar | None,
+    time_limit_s: int = TIME_LIMIT_S,
 ) -> tuple[dict[str, FloatArray], dict[str, str]]:
     """Final forecasts ``[asset, horizon, bin]`` of every program at the panel's last hour, plus failures by name.
 
-    Each program runs in a fresh spawned process that only ever reads the panel up to its last hour.
+    Each program runs in a fresh spawned process that only ever reads the panel up to its last hour, and sees the
+    scheduled events of ``calendar`` (none if it is None).
     """
     path = workdir / "panel.npz"
     panel.save(path)
     times = np.array([len(panel.ts) - 1], dtype=np.int64)
     finals: dict[str, FloatArray] = {}
     failures: dict[str, str] = {}
-    with Evaluator(path, workers=workers) as evaluator:
+    source = calendar.source if calendar is not None else None
+    with Evaluator(path, workers=workers, calendar=source) as evaluator:
         futures = {p.name: evaluator.submit(p.source, times, time_limit_s) for p in release.programs}
         for name, future in futures.items():
             try:
@@ -145,9 +155,32 @@ def _number(value: float) -> float | None:
     return float(value) if np.isfinite(value) else None
 
 
-def inputs(panel: Panel) -> dict[str, Any]:
-    """What the programs saw: the last ``LOOKBACK`` hours of candles and senses, identified by hash, and the last
-    hour in full."""
+def scheduled(at: int, calendar: calendar_data.Calendar | None) -> dict[str, Any]:
+    """The scheduled events every program saw at forecast time ``at`` (``ctx.events``), and the calendar they came
+    from; without a calendar, that programs saw none."""
+    layout = (
+        f"[hours from the issue time, kind] for every event from {calendar_data.BEFORE_HOURS} hours before to "
+        f"{calendar_data.AFTER_HOURS} hours after it"
+    )
+    if calendar is None or calendar.source is None:
+        return {
+            "calendar": CALENDAR,
+            "unavailable": "not loaded: programs saw no events",
+            "around": [],
+            "around_layout": layout,
+        }
+    return {
+        "calendar": CALENDAR,
+        "keccak256": hex32(bytes(keccak(calendar.raw))),
+        "covers": [calendar.first.isoformat(), calendar.last.isoformat()],
+        "around": [[hours, kind] for hours, kind in calendar.around(at)],
+        "around_layout": layout,
+    }
+
+
+def inputs(panel: Panel, calendar: calendar_data.Calendar | None) -> dict[str, Any]:
+    """What the programs saw: the last ``LOOKBACK`` hours of candles and senses, identified by hash, the last hour in
+    full, and the scheduled events around the forecast time."""
     names = sorted(panel.senses)
     series = [getattr(panel, f)[:, -LOOKBACK:] for f in FIELDS] + [panel.senses[n][:, -LOOKBACK:] for n in names]
     window = np.stack(series, axis=-1).transpose(1, 0, 2)
@@ -159,6 +192,7 @@ def inputs(panel: Panel) -> dict[str, Any]:
         "keccak256": hex32(bytes(keccak(np.ascontiguousarray(window, dtype="<f8").tobytes()))),
         "keccak256_layout": f"little-endian float64, ordered hour, asset, field ({fields})",
         "last_candle": {a: [float(getattr(panel, f)[i, -1]) for f in FIELDS] for i, a in enumerate(panel.assets)},
+        "events": scheduled(int(panel.ts[-1]) + HOUR, calendar),
     }
     if names:
         out["last_senses"] = {
@@ -176,6 +210,7 @@ def seal(
     *,
     ledger: Ledger,
     commit: str | None,
+    calendar: calendar_data.Calendar | None,
     judging: Sequence[dict[str, str]] = (),
 ) -> Sealed:
     """Build an issue's leaves, root, manifest and forecasts file. ``judging`` lists the pre-registered rules in force
@@ -208,7 +243,7 @@ def seal(
                 "question": QUESTION,
                 "prices": PRICES,
             },
-            "inputs": inputs(panel),
+            "inputs": inputs(panel, calendar),
             "forecasters": release.describe(),
             "judging": list(judging),
             "failed": failures,

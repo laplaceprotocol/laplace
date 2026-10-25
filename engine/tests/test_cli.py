@@ -4,6 +4,7 @@ from collections.abc import Callable
 from pathlib import Path
 
 import httpx
+import numpy as np
 import pytest
 from eth_account import Account
 from eth_hash.auto import keccak
@@ -229,3 +230,44 @@ def test_the_repository_rule_for_r1_exists() -> None:
     rule = cli.REPO / "docs" / "judging" / "r1.md"
     assert rule.is_file()
     assert "0x97bc9657cb5b4af73b46e0031ac385cab039e72fb9fb8edf591bd457f149914e" in rule.read_text()
+
+
+def test_slow_senses_cost_an_alert_never_the_hour(
+    monkeypatch: pytest.MonkeyPatch, make_panel: Callable[..., Panel]
+) -> None:
+    from laplace_research.evolve import senses as sense_data
+
+    def stuck(panel: Panel, cache_dir: Path, **kwargs: object) -> dict[str, object]:
+        time.sleep(5)
+        return {}
+
+    monkeypatch.setattr(cli.sense_data, "build", stuck)
+    panel = make_panel()
+    problems: list[str] = []
+    started = time.monotonic()
+    out = cli.live_senses(panel, Path("/nonexistent"), problems, 0.2)
+    assert time.monotonic() - started < 2
+    assert sorted(out) == sorted(sense_data.NAMES)
+    assert all(np.isnan(v).all() for v in out.values())
+    assert "not complete" in problems[0]
+
+
+def test_an_unreadable_calendar_seals_the_hour_without_events(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, make_panel: Callable[..., Panel]
+) -> None:
+    rel = Release("r9", "test", (Program("naive", NAIVE, True, "baseline"),), ())
+    release.write(rel, tmp_path / "r9", tmp_path / "private")
+    monkeypatch.setattr(candles, "wait_for", lambda issue, cache_dir, deadline: make_panel(end_issue=issue))
+
+    def unreadable(path: Path = Path("x")) -> None:
+        raise ValueError("bad calendar")
+
+    monkeypatch.setattr(cli.calendar_data, "load", unreadable)
+    inbox = Inbox()
+    monkeypatch.setattr(notify.Telegram, "from_env", classmethod(lambda cls: inbox))
+    base = ["issue", "--release", str(tmp_path / "r9"), "--private", str(tmp_path / "private")]
+    assert cli.main([*base, "--data", str(tmp_path / "data"), "--workers", "1", "--issue", str(ISSUE)]) == 0
+    manifest = json.loads((tmp_path / "data" / "issues" / str(ISSUE) / "manifest.json").read_bytes())
+    assert manifest["inputs"]["events"]["around"] == []
+    assert manifest["failed"] == {}
+    assert any("event calendar unreadable" in m for m in inbox.messages)
