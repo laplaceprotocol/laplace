@@ -33,6 +33,7 @@ COINBASE = "https://api.exchange.coinbase.com/products/{product}/candles"
 BINANCE_FUNDING = "https://fapi.binance.com/fapi/v1/fundingRate"
 BYBIT_OPEN_INTEREST = "https://api.bybit.com/v5/market/open-interest"
 BYBIT_PAGE = 200  # the API's largest page
+BYBIT_MAX_PAGES = 8  # a month of hourly snapshots is four pages; more means the API is misbehaving
 REQUEST_INTERVAL_S = 0.15
 
 
@@ -185,8 +186,8 @@ def open_interest_hourly(
 
         def fetch(lo: int = lo, hi: int = hi) -> list[list[float]]:
             rows: dict[int, float] = {}
-            cursor = ""
-            while True:
+            cursor, seen = "", set()
+            for _ in range(BYBIT_MAX_PAGES):
                 params = {
                     "category": "linear",
                     "symbol": symbol,
@@ -204,6 +205,11 @@ def open_interest_hourly(
                 cursor = body["result"].get("nextPageCursor") or ""
                 if not cursor or not page:
                     break
+                if cursor in seen:
+                    raise RuntimeError(f"bybit open interest for {symbol}: the page cursor repeats")
+                seen.add(cursor)
+            else:
+                raise RuntimeError(f"bybit open interest for {symbol}: more than {BYBIT_MAX_PAGES} pages for a month")
             return [[t, v] for t, v in sorted(rows.items()) if lo <= t < hi]
 
         for stamp, value in _cached(cache_dir / f"oi-{symbol}-{first:%Y%m}.json", following, fetch):

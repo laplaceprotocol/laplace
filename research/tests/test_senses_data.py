@@ -87,3 +87,26 @@ def test_open_interest_follows_the_cursor_and_keeps_only_old_snapshots(tmp_path:
     assert sorted(out) == stamps
     assert out[stamps[2]] == 1000 + stamps[2] // HOUR % 100
     assert all(t + HOUR <= time.time() for t in out)
+
+
+@pytest.mark.parametrize("cursors", ["repeat", "endless"])
+def test_open_interest_stops_when_the_pages_never_end(tmp_path: Path, cursors: str) -> None:
+    import json
+    from datetime import UTC, datetime
+    from itertools import count
+
+    import httpx
+
+    from laplace_research.data.senses import open_interest_hourly
+
+    month = datetime(2025, 10, 1, tzinfo=UTC)
+    fresh = count()
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        cursor = "again" if cursors == "repeat" else f"page{next(fresh)}"
+        row = {"openInterest": "1", "timestamp": str(int(month.timestamp()) * 1000)}
+        body = {"retCode": 0, "retMsg": "OK", "result": {"list": [row], "nextPageCursor": cursor}}
+        return httpx.Response(200, text=json.dumps(body))
+
+    with httpx.Client(transport=httpx.MockTransport(handler)) as client, pytest.raises(RuntimeError, match="page"):
+        open_interest_hourly("BTCUSDT", month, datetime(2025, 10, 2, tzinfo=UTC), client=client, cache_dir=tmp_path)
