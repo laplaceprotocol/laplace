@@ -89,3 +89,15 @@ def test_the_learned_layer_starts_from_ev_har_and_reports_its_weights(panel: Pan
     assert np.allclose(p.sum(axis=-1), 1)
     assert set(model.params["net"]) == {"1", "4", "24"}
     assert model.params["inputs"] == list(learned.NAMES)
+
+
+def test_a_price_back_where_it_was_gives_exactly_zero_return(panel: Panel) -> None:
+    close = panel.close.copy()
+    close[2, 1000] = close[2, 996]  # four hours later, the same price after moving in between
+    close[2, 1024] = close[2, 1000]
+    pw = learned.Panelwise.of(
+        close, np.maximum(panel.high, close), np.minimum(panel.low, close), sensed(panel), panel.assets
+    )
+    assert pw.returns[4][2, 1000] == 0.0
+    assert pw.returns[24][2, 1024] == 0.0
+    assert pw.returns[1][2, 1001] == np.log(close[2, 1001] / close[2, 1000])

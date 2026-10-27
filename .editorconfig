@@ -10,3 +10,8 @@ indent_size = 4
 
 [*.{yml,yaml,json,toml,md}]
 indent_size = 2
+
+# A release's programs and parameter files are identified by the hash of their exact bytes.
+[engine/releases/**]
+insert_final_newline = unset
+trim_trailing_whitespace = unset

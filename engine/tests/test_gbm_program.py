@@ -93,6 +93,8 @@ def test_ev_gbm_program_computes_research_trees_on_its_own_ev_har(fitted, tmp_pa
                 own = np.array([*net_inputs(ctx, sd), a, ctx.hour, ctx.weekday])  # type: ignore[operator]
                 logits = np.log(base) + gbm.walk(model.trees[h], own[None, :])[0]
                 assert np.asarray(fn(ctx)) == pytest.approx(learned.softmax(logits), abs=1e-12)
+                # Given the same spread, the program's inputs reach research's leaves, bit for bit.
+                assert np.array_equal(np.asarray(walk(stored, h, y)), expected)  # type: ignore[operator]
                 gaps.append(float(np.abs(np.asarray(fn(ctx)) - research[a, j, n]).max()))
     # Where EV-HAR's program differs from research (its 720-hour mean covers 719 hours), a tree can take the other
     # branch; on these windows that stays small.
@@ -113,6 +115,13 @@ def test_the_evaluator_hands_a_program_its_parameter_file(fitted, tmp_path) -> N
         writer = evaluator.submit(
             "def forecast(ctx):\n    ctx.params['h1.value'][0] = 1.0\n    return [1.0] * 10\n", times, 60, raw
         ).result()
+        accumulator = evaluator.submit(
+            "import numpy as np\n"
+            "def forecast(ctx):\n    np.add.at(ctx.params['h1.value'], [0], 1.0)\n    return [1.0] * 10\n",
+            times,
+            60,
+            raw,
+        ).result()
     assert outcome.error is None
     assert outcome.probs is not None
     fn, stored = load(source), params.decode(raw)
@@ -128,3 +137,5 @@ def test_the_evaluator_hands_a_program_its_parameter_file(fitted, tmp_path) -> N
     assert (broken.error or "").startswith("params:")
     assert writer.probs is None
     assert "read-only" in (writer.error or "")
+    assert accumulator.probs is None
+    assert (accumulator.error or "").startswith("rejected")

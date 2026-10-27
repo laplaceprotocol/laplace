@@ -192,8 +192,9 @@ def refit_programs(
     run_dir: Path, cutoff: datetime, suffix: str, *, workers: int
 ) -> tuple[list[Program], dict[str, Any]]:
     """EV-GBM, and GARCH, HAR and EV-HAR refitted on the same data, as the rolling test fits them for a month that
-    starts at ``cutoff``: every model on every hour from ``FIT_START`` to a month before ``cutoff``, the trees stopped
-    on that last month. Program names get ``-suffix``. Also returns a record of the fit: its windows, the trees'
+    starts at ``cutoff``: every model on the hours from ``FIT_START`` to a month before ``cutoff`` (the trees, GARCH's
+    likelihood and EV-HAR's overlay on every hour, the HAR regressions and tails on every second hour), the trees
+    stopped on that last month. Program names get ``-suffix``. Also returns a record of the fit: its windows, the trees'
     rounds, and every new program's score on the stopping month, run as a program and in research."""
     from laplace_engine.baselines import gbm_program, ladder_programs
     from laplace_research.data.events import load as load_calendar
@@ -207,6 +208,8 @@ def refit_programs(
     panel = run.panel
     if "rv" not in panel.senses:
         raise ValueError(f"{run_dir.name}'s panel has no senses: run `laplace-research evolve senses` first")
+    if int(panel.ts[-1]) < int(cutoff.timestamp()):
+        raise ValueError(f"{run_dir.name}'s panel ends before {cutoff:%Y-%m-%d %H:%M}")
     start, valid_from = parse_utc(FIT_START), month_before(cutoff)
     fit_hours, valid_hours = hours_between(panel, start, valid_from), hours_between(panel, valid_from, cutoff)
     if len(valid_hours) < 24 * 21:

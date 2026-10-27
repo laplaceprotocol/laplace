@@ -132,8 +132,8 @@ def _run(source: str, times: IntArray, time_limit_s: int, params: bytes | None =
         return Outcome(None, f"calendar: {type(exc).__name__}: {exc}"[:400], 0.0)
     try:
         arrays = parameter_files.decode(params) if params is not None else parameter_files.EMPTY
-    except parameter_files.BadParams as exc:  # a broken parameter file fails its program, not the process
-        return Outcome(None, f"params: {exc}"[:400], 0.0)
+    except Exception as exc:  # a broken parameter file fails its program, not the process or the hour
+        return Outcome(None, f"params: {type(exc).__name__}: {exc}"[:400], 0.0)
     reader = HistoryReader(*_HISTORY, calendar=calendar)
     out = np.empty((len(reader.assets), len(HORIZONS), len(times), N_BINS))
     signal.alarm(time_limit_s)

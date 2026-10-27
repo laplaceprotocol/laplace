@@ -155,8 +155,9 @@ def cmd_refit(args: argparse.Namespace) -> int:
     notes = (
         f"{base.name}'s forecasters unchanged, plus {', '.join(p.name for p in added)}: EV-GBM, EV-HAR corrected by "
         "boosted trees (its trees are in its parameter file), and GARCH, HAR and EV-HAR refitted on the same data. All "
-        f"are fitted on every hour of {args.run.name}'s panel from {record['fit'][0][:10]} to {record['fit'][1]} UTC; "
-        f"the trees stopped on the month after, to {record['stop'][1]} UTC. Exploratory until a rule judges them."
+        f"are fitted on {args.run.name}'s panel from {record['fit'][0][:10]} to {record['fit'][1]} UTC as the rolling "
+        f"test fits them, the trees stopped on the month after, to {record['stop'][1]} UTC. Exploratory until a rule "
+        "judges them."
     )
     extended = release.Release(args.name, notes, (*base.programs, *added), base.pools)
     release.write(extended, args.out, args.private)

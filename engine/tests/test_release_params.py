@@ -56,3 +56,15 @@ def test_a_release_file_cannot_point_a_parameter_file_elsewhere(tmp_path: Path) 
 def test_private_programs_cannot_carry_parameter_files() -> None:
     with pytest.raises(ValueError, match="public"):
         Release("t3", "", (Program("secret", SOURCE, False, "test", params=PARAMS),), ())
+
+
+def test_names_that_are_not_plain_are_refused(tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match="names"):
+        Release("t4", "", (Program("../up", SOURCE, True, "test"),), ())
+    public, private = tmp_path / "release", tmp_path / "private"
+    write(with_params(), public, private)
+    body = json.loads((public / "release.json").read_text())
+    next(e for e in body["forecasters"] if e["name"] == "trees")["name"] = "../trees"
+    (public / "release.json").write_text(json.dumps(body))
+    with pytest.raises(ReleaseMismatch, match="name"):
+        load(public, private)

@@ -75,3 +75,23 @@ def test_large_or_odd_arrays_are_refused_when_written() -> None:
         params.encode({"a": np.array([2**40])})
     with pytest.raises(params.BadParams):
         params.encode({"a": np.array(["text"])})
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        {"a": {"data": "", "dtype": "<f8", "shape": [2**32, 2**32]}},
+        {"a": {"data": "", "dtype": "<f8", "shape": [2**70]}},
+        {"a": {"data": "", "dtype": "<f8", "shape": [1] * 65}},
+    ],
+    ids=["product overflows int64", "beyond int64", "too many dimensions"],
+)
+def test_shapes_that_could_overflow_are_refused(body: dict[str, object]) -> None:
+    raw = json.dumps({"arrays": body, "format": params.FORMAT}, sort_keys=True, separators=(",", ":")).encode()
+    with pytest.raises(params.BadParams):
+        params.decode(raw)
+
+
+def test_deeply_nested_json_is_refused() -> None:
+    with pytest.raises(params.BadParams):
+        params.decode(b"[" * 100_000 + b"]" * 100_000)

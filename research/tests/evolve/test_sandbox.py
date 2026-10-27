@@ -50,6 +50,9 @@ ESCAPES = {
     "raw pointer": "def forecast(ctx):\n    return ctx.close.ctypes\n",
     "attribute store": "def forecast(ctx):\n    ctx.horizon = 1\n    return [1] * 10\n",
     "dunder name": "def forecast(ctx):\n    return __builtins__\n",
+    "ufunc.at write": (
+        "import numpy as np\ndef forecast(ctx):\n    np.add.at(ctx.close, [0], 1.0)\n    return [1] * 10\n"
+    ),
 }
 
 

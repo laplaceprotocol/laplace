@@ -51,8 +51,8 @@ class Context:
     ``events`` lists the scheduled events (``data.events``: ``fomc``, ``cpi``, ``nfp``, ``us-open``, ``us-close``) from
     24 hours before to 48 hours after the forecast time, as (hours from the forecast time, kind), oldest first; one
     with ``0 <= hours < horizon`` happens inside the forecast's window. It is empty where the calendar does not reach.
-    ``params`` holds the program's parameter file (``evolve.params``), read-only; it is empty for a program without
-    one.
+    ``params`` holds the arrays of the program's parameter file (``evolve.params``), read-only and decoded afresh for
+    every evaluation; it is empty for a program without one.
     """
 
     asset: str

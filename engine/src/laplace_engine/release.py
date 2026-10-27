@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -23,6 +24,7 @@ from eth_hash.auto import keccak
 from laplace_engine.quantize import WEIGHT_SCALE
 
 RELEASE_FILE = "release.json"
+NAME = re.compile(r"[a-z0-9][a-z0-9-]{0,63}")  # names become file names
 
 
 class ReleaseMismatch(ValueError):
@@ -129,6 +131,8 @@ class Release:
 
     def __post_init__(self) -> None:
         names = [p.name for p in self.programs] + [p.name for p in self.pools]
+        if any(not NAME.fullmatch(n) for n in names):
+            raise ValueError(f"forecaster names must match {NAME.pattern}")
         if any(p.params is not None and not p.public for p in self.programs):
             raise ValueError("parameter files are public: a private program cannot carry one")
         if len(set(names)) != len(names):
@@ -193,6 +197,8 @@ def load(release_dir: Path, private_dir: Path | None) -> Release:
     programs: list[Program] = []
     pools: list[AnyPool] = []
     for entry in body["forecasters"]:
+        if not NAME.fullmatch(str(entry["name"])):
+            raise ReleaseMismatch(f"bad forecaster name {entry['name']!r}")
         if entry["kind"] == "program":
             if entry["public"]:
                 path = release_dir / entry["path"]

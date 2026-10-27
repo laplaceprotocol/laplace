@@ -84,11 +84,12 @@ class Panelwise:
         means = {w: trailing_mean(filled, w) for w in (1, 4, 24, 168, LONGEST)}
         implied = implied_hourly_variance(senses["dvol"], assets)
         implied = np.where(np.isfinite(implied), implied, means[LONGEST])
-        cum = np.cumsum(r, axis=1)
+        # log(close[t] / close[t - k]), as a program computes it: an unchanged price gives exactly 0 (a sum of hourly
+        # returns gives +-1e-15, and boosted trees split at +-1e-35 around zero).
         returns = {}
         for k in (1, 4, 24):
             out = np.zeros_like(r)
-            out[:, k:] = cum[:, k:] - cum[:, :-k]
+            out[:, k:] = np.log(close[:, k:] / close[:, :-k])
             returns[k] = out
         hl = np.log(high / low) ** 2 / (4 * math.log(2))
         parkinson = {w: trailing_mean(hl, w) for w in (1, 24)}
