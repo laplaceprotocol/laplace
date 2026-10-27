@@ -73,6 +73,13 @@ ctx.open, ctx.high, ctx.low, ctx.close, ctx.volume
                 read-only numpy float arrays: this asset's last 720 hourly candles, oldest first;
                 index -1 is the candle that just closed
 ctx.peers       dict asset -> object with .open .high .low .close .volume for every asset (same aligned window)
+ctx.senses      dict of read-only arrays aligned with ctx.close (NaN where unknown): "rv" (each hour's realized
+                variance from 5-minute returns), "dvol" (30-day implied volatility index, annualized %, BTC and ETH
+                only), "funding" (perpetual funding rate), "oi" (perpetual open interest in coins, at each hour's start)
+ctx.peer_senses dict asset -> the same senses for every asset
+ctx.events      tuple of (hours from now, kind) for scheduled events from 24 hours before to 48 hours after the
+                forecast, oldest first; kinds "fomc", "cpi", "nfp", "us-open", "us-close"; an event with
+                0 <= hours < ctx.horizon falls inside the forecast's window
 ctx.lib.normal_probs(sd, edges, loc=0.0)
 ctx.lib.laplace_probs(sd, edges, loc=0.0)
 ctx.lib.student_t_probs(sd, nu, edges, loc=0.0)
@@ -93,10 +100,15 @@ class Scored:
     code: str
     gain: float
     breakdown: dict[str, float]
+    reference: str = "the naive baseline"
 
     def describe(self) -> str:
-        parts = ", ".join(f"{k} {v:+.4f}" for k, v in self.breakdown.items())
-        return f"{self.gain:+.4f} nats per question vs the naive baseline ({parts})"
+        horizons = ", ".join(f"{k} {v:+.4f}" for k, v in self.breakdown.items() if not k.startswith("seg:"))
+        text = f"{self.gain:+.4f} nats per question vs {self.reference} ({horizons})"
+        segments = [(k[4:], v) for k, v in self.breakdown.items() if k.startswith("seg:")]
+        if segments:
+            text += "; where it gains and loses: " + ", ".join(f"{k} {v:+.4f}" for k, v in segments)
+        return text
 
 
 def build_prompt(directive: str, parent: Scored, inspirations: list[Scored], failures: list[str]) -> str:

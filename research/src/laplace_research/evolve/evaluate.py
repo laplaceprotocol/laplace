@@ -14,7 +14,7 @@ import resource
 import signal
 import time
 import warnings
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from concurrent.futures import ProcessPoolExecutor
 from concurrent.futures.process import BrokenProcessPool
 from dataclasses import dataclass
@@ -24,6 +24,7 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
+import numpy.typing as npt
 
 from laplace_research.data import events
 from laplace_research.evolve import params as parameter_files
@@ -207,8 +208,18 @@ def mean_gain(log_p: FloatArray, reference_log_p: FloatArray) -> float:
     return float(np.mean(log_p - reference_log_p))
 
 
-def breakdown(log_p: FloatArray, reference_log_p: FloatArray, assets: Sequence[str]) -> dict[str, float]:
+def breakdown(
+    log_p: FloatArray,
+    reference_log_p: FloatArray,
+    assets: Sequence[str],
+    segments: Mapping[str, npt.NDArray[np.bool_]] | None = None,
+) -> dict[str, float]:
+    """Gain over the reference per horizon and per asset, and over each segment (``[asset, horizon, sample]`` masks,
+    reported as ``seg:<name>``; empty segments are left out)."""
     gain = log_p - reference_log_p
     out = {f"h{h}": float(np.mean(gain[:, j])) for j, h in enumerate(HORIZONS)}
     out |= {a: float(np.mean(gain[i])) for i, a in enumerate(assets)}
+    for name, mask in (segments or {}).items():
+        if mask.any():
+            out[f"seg:{name}"] = float(np.mean(gain[mask]))
     return out

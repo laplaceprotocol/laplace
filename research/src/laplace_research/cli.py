@@ -37,6 +37,15 @@ def build_parser() -> argparse.ArgumentParser:
     evolve.add_argument(
         "--ages", action="store_true", help="rolling: also score every fit on every later month (rolling-ages.json)"
     )
+    evolve.add_argument(
+        "--seed", type=Path, help="init: the program every island starts from (default: the naive seed)"
+    )
+    evolve.add_argument(
+        "--reference",
+        choices=["naive", "ev-har"],
+        default="naive",
+        help="init: what a program's gain is measured against",
+    )
     return parser
 
 
@@ -74,7 +83,10 @@ def main(argv: list[str] | None = None) -> int:
 
         run_dir = RUNS / f"evolve-{args.run_id}"
         if args.action == "init":
-            Run.init(run_dir, CACHE / "candles")
+            from laplace_research.evolve.islands import SEED_PROGRAM
+
+            seed_code = args.seed.read_text() if args.seed else SEED_PROGRAM
+            Run.init(run_dir, CACHE / "candles", seed_code=seed_code, reference=args.reference)
         elif args.action == "senses":
             from laplace_research.evolve import senses
             from laplace_research.evolve.panel import Panel
