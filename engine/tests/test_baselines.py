@@ -139,3 +139,55 @@ def test_ev_har_program_computes_the_research_overlay(panel: Panel, tmp_path) ->
                 expected = student_t_probs(np.sqrt(variance) * scale, ev.nu[h], edges(h))
                 got = np.asarray(fn(reader.context(a, t, h)))
                 assert got == pytest.approx(expected, abs=1e-12), (when, a, h)
+
+
+def test_ev_net_program_reproduces_the_learned_layer(panel: Panel, tmp_path) -> None:  # type: ignore[no-untyped-def]
+    from laplace_engine.baselines import learned_program
+    from laplace_research.data.events import load as load_calendar
+    from laplace_research.evolve import learned
+
+    rng = np.random.default_rng(5)
+    r2 = b.hourly_returns(panel.close) ** 2
+    rv = r2 * rng.uniform(0.5, 1.5, r2.shape)
+    dvol = np.full(panel.close.shape, np.nan)
+    dvol[0] = 100 * np.sqrt(b.trailing_mean(r2[0], 168) * b.HOURS_PER_YEAR)
+    funding = rng.normal(1e-4, 5e-5, panel.close.shape)
+    senses = {"rv": rv, "dvol": dvol, "funding": funding}
+    fit = sample_times(panel, utc(int(panel.ts[0])), utc(int(panel.ts[900])), 3)
+    rungs = b.ladder(
+        panel.close, realized_bins(panel, fit), fit, slice(0, 900), senses=senses, assets=panel.assets, ts=panel.ts
+    )
+    ev = rungs[-1]
+    pw = learned.Panelwise.of(panel.close, panel.high, panel.low, senses, panel.assets)
+    calendar = load_calendar()
+    model = learned.ev_net(
+        ev, pw, calendar, panel.ts, np.arange(720, 900), np.arange(900, 1050), lambda t: realized_bins(panel, t)
+    )
+    source = learned_program(ev, model.params["net"], panel.assets, "a synthetic window")
+    assert len(source.encode()) < 16_000  # the sandbox's limit
+    fn = load(source)
+    ev_fn = load(ladder_programs(rungs, panel.assets, "a synthetic window")["ev-har"])
+    namespace: dict[str, object] = {}
+    exec(source, namespace)  # trusted: our own generated source, to reach its helpers
+    net_inputs = namespace["_net_inputs"]
+
+    path = tmp_path / "panel.npz"
+    panel.with_senses(senses).save(path)
+    reader = HistoryReader(*ensure_history(path))
+    times = np.array([1060, 1100, 1150, 1198], dtype=np.int64)
+    research = model.probs(times)
+    sds = ev.sd(times)
+    for n, t in enumerate(times):
+        reader.advance_to(int(t))
+        for a in (0, 3):
+            for j, h in enumerate(HORIZONS):
+                ctx = reader.context(a, int(t), h)
+                got = np.asarray(fn(ctx))
+                # EV-HAR's own program differs from research where its 720-hour mean covers the window's 719 hours;
+                # the learned layer may carry that difference, and add nothing of its own.
+                ev_got = np.asarray(ev_fn(ctx))
+                ev_gap = float(np.abs(ev_got / ev_got.sum() - ev.probs(np.array([t]))[a, j, 0]).max())
+                assert float(np.abs(got - research[a, j, n]).max()) <= 3 * ev_gap + 1e-9, (t, a, h)
+                x = learned.inputs(pw, calendar, panel.ts, np.array([t]), sds[:, j, n : n + 1], h)[a, 0]
+                y = np.asarray(net_inputs(ctx, float(sds[a, j, n])))  # type: ignore[operator]
+                assert y == pytest.approx(x, rel=1e-9, abs=1e-12), (t, a, h)

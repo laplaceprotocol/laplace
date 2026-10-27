@@ -9,6 +9,7 @@ return rather than the full history's, and HAR's 720-hour mean covers the window
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
+from typing import Any
 
 from laplace_research.evolve.baselines import Baseline
 from laplace_research.evolve.islands import SEED_PROGRAM
@@ -247,6 +248,208 @@ def forecast(ctx):
     scale = math.exp(0.5 * sum(b * x for b, x in zip(BETA[ctx.horizon], _inputs(ctx))))
     return ctx.lib.student_t_probs(math.sqrt(max(var, floor)) * scale, NU[ctx.horizon], ctx.edges)
 '''
+
+
+EV_NET = '''\
+import math
+import numpy as np
+
+WINDOWS = {windows!r}
+HOURS_PER_YEAR = 8760
+RELEASES = ("fomc", "cpi", "nfp")
+FLOOR = 0.001  # final forecasts mix in the uniform distribution at this weight
+# EV-HAR, exactly as in its own program: per asset and horizon its intercept, one coefficient per window of 5-minute
+# realized variance and one for the DVOL-implied variance (COEFS); its overlay's coefficients (BETA); its tails (NU).
+# Then one small network per horizon that corrects EV-HAR's log-probabilities. NET holds each network's tensors, in the
+# order of SHAPES, as 16-bit two's-complement integers in hex, each tensor scaled by its own factor. All fitted on
+# {origin}.
+COEFS = {{
+{coefs}
+}}
+BETA = {beta}
+NU = {nu}
+SHAPES = {shapes}
+NET = {{
+{net}
+}}
+
+
+def _filled_of(close, rv):
+    """Hourly realized variance from 5-minute returns over a window, the squared hourly return where it is unknown."""
+    r = np.diff(np.log(close))
+    if rv is None:
+        return r * r
+    rv = rv[1:]
+    return np.where(np.isfinite(rv), rv, r * r)
+
+
+def _filled(ctx):
+    return _filled_of(ctx.close, ctx.senses.get("rv"))
+
+
+def _implied(ctx):
+    """The hourly variance implied by the asset's DVOL index at the forecast hour, else by BTC's (NaN if neither)."""
+    value = math.nan
+    own = ctx.senses.get("dvol")
+    if own is not None:
+        value = float(own[-1])
+    if not math.isfinite(value):
+        market = ctx.peer_senses.get("BTC", {{}}).get("dvol")
+        value = float(market[-1]) if market is not None else math.nan
+    return (value / 100) ** 2 / HOURS_PER_YEAR
+
+
+def _session_hours(events, horizon):
+    """Hours of NYSE regular session inside the forecast's window."""
+    total, opened = 0.0, None
+    for hours, kind in events:
+        if kind == "us-open":
+            opened = hours
+        elif kind == "us-close" and opened is not None:
+            total += max(0.0, min(hours, horizon) - max(opened, 0.0))
+            opened = None
+    return total
+
+
+def _inputs(ctx):
+    """EV-HAR's overlay inputs: the window's weekend share, the UTC hour (1- and 4-hour horizons), then the scheduled
+    releases inside, just before and just after the window, NYSE opens inside it, and its share of the session."""
+    h = ctx.horizon
+    x = [sum(1 for k in range(h) if (ctx.weekday + (ctx.hour + k) // 24) % 7 >= 5) / h]
+    if h <= 4:
+        x += [(1.0 if ctx.hour == j else 0.0) - 1 / 24 for j in range(24)]
+    releases = [t for t, kind in ctx.events if kind in RELEASES]
+    x.append(sum(1 for t in releases if 0 <= t < h))
+    x.append(sum(1 for t in releases if -3 <= t < 0))
+    x.append(sum(1 for t in releases if h <= t < h + 2))
+    x.append(sum(1 for t, kind in ctx.events if kind == "us-open" and 0 <= t < h))
+    x.append(_session_hours(ctx.events, h) / h)
+    return x
+
+
+def _tensors(h):
+    """Horizon h's network: its tensors, decoded from 16-bit integers and scaled."""
+    text, scales = NET[h]
+    ints = [int(text[i : i + 4], 16) for i in range(0, len(text), 4)]
+    ints = [v - 65536 if v >= 32768 else v for v in ints]
+    out, i = [], 0
+    for shape, scale in zip(SHAPES, scales):
+        n = 1
+        for d in shape:
+            n *= d
+        out.append(np.array(ints[i : i + n], dtype=np.float64).reshape(shape) * scale)
+        i += n
+    return out
+
+
+TENSORS = {{h: _tensors(h) for h in NET}}
+
+
+def _net_inputs(ctx, sd):
+    """The network's inputs (laplace_research.evolve.learned.NAMES, in that order) from the window and EV-HAR's sd."""
+    filled = _filled(ctx)
+    week = max(float(np.mean(filled[-168:])), 1e-12)
+    means = {{w: max(float(np.mean(filled[-w:])), 1e-12) for w in (1, 4, 24, 720)}}
+    implied = _implied(ctx)
+    if not math.isfinite(implied):
+        implied = float(np.mean(filled[-720:]))
+    close = ctx.close
+    ret = {{k: math.log(close[-1] / close[-1 - k]) for k in (1, 4, 24)}}
+    hl = np.log(ctx.high / ctx.low) ** 2 / (4 * math.log(2))
+    btc = ctx.peers["BTC"]
+    btc_filled = _filled_of(btc.close, ctx.peer_senses.get("BTC", {{}}).get("rv"))
+    btc_week = max(float(np.mean(btc_filled[-168:])), 1e-12)
+    funding = ctx.senses.get("funding")
+    funding = float(funding[-1]) * 1e4 if funding is not None else 0.0
+    overlay = _inputs(ctx)
+    x = [
+        math.log(max(sd, 1e-12) / float(ctx.edges[5])),
+        *(math.log(means[k] / week) for k in (1, 4, 24, 720)),
+        math.log(max(implied, 1e-12) / week),
+        ret[1] / math.sqrt(week),
+        ret[4] / math.sqrt(4 * week),
+        ret[24] / math.sqrt(24 * week),
+        abs(ret[1]) / math.sqrt(week),
+        math.log(max(float(hl[-1]), 1e-12) / week),
+        math.log(max(float(np.mean(hl[-24:])), 1e-12) / week),
+        math.log(max(float(btc_filled[-1]), 1e-12) / btc_week),
+        math.log(btc.close[-1] / btc.close[-2]) / math.sqrt(btc_week),
+        funding,
+        math.sin(2 * math.pi * ctx.hour / 24),
+        math.cos(2 * math.pi * ctx.hour / 24),
+        math.sin(2 * math.pi * ctx.hour / 12),
+        math.cos(2 * math.pi * ctx.hour / 12),
+        math.sin(2 * math.pi * ctx.weekday / 7),
+        math.cos(2 * math.pi * ctx.weekday / 7),
+        overlay[0],
+        *overlay[-5:],
+    ]
+    return [v if math.isfinite(v) else 0.0 for v in x]
+
+
+def forecast(ctx):
+    """EV-NET: EV-HAR's distribution, corrected by a small network trained on the binned log score."""
+    filled = _filled(ctx)
+    means = [float(np.mean(filled[-w:])) for w in WINDOWS]
+    implied = _implied(ctx)
+    if not math.isfinite(implied):
+        implied = means[3]
+    c = COEFS[ctx.asset][ctx.horizon]
+    var = c[0] + (sum(k * m for k, m in zip(c[1:5], means)) + c[5] * implied) * ctx.horizon
+    floor = 0.1 * means[2] * ctx.horizon
+    scale = math.exp(0.5 * sum(b * x for b, x in zip(BETA[ctx.horizon], _inputs(ctx))))
+    sd = math.sqrt(max(var, floor)) * scale
+    base = np.asarray(ctx.lib.student_t_probs(sd, NU[ctx.horizon], ctx.edges), dtype=np.float64)
+    base = (1 - FLOOR) * base / base.sum() + FLOOR / len(base)
+    mu, spread, w1, b1, w2, b2 = TENSORS[ctx.horizon]
+    x = (np.array(_net_inputs(ctx, sd)) - mu) / spread
+    logits = np.log(base) + np.tanh(x @ w1 + b1) @ w2 + b2
+    p = np.exp(logits - logits.max())
+    return p / p.sum()
+'''
+
+
+def _hex16(ints: Sequence[int]) -> str:
+    return "".join(f"{v & 0xFFFF:04x}" for v in ints)
+
+
+NET_TENSORS = ("mu", "sd", "w1", "b1", "w2", "b2")
+
+
+def learned_program(ev: Baseline, net: Mapping[str, Mapping[str, Any]], assets: Sequence[str], origin: str) -> str:
+    """Source code for EV-NET from a fitted EV-HAR and its stored networks (``learned.Net.stored()`` per horizon)."""
+    coefs = "\n".join(
+        f"    {asset!r}: {{\n"
+        + "".join(
+            f"        {h}: ({', '.join(repr(float(c)) for c in by_h[str(h)])}),\n" for h in sorted(map(int, by_h))
+        )
+        + "    },"
+        for asset, by_h in zip(assets, ev.params["per_asset"], strict=True)
+    )
+    beta = (
+        "{\n"
+        + "".join(
+            f"    {h}: ({', '.join(repr(float(v)) for v in ev.params['overlay'][str(h)]['beta'])}),\n"
+            for h in sorted(map(int, ev.params["overlay"]))
+        )
+        + "}"
+    )
+    first = net[sorted(net, key=int)[0]]
+    shapes = tuple(tuple(first[t]["shape"]) for t in NET_TENSORS)
+    rows = []
+    for h in sorted(net, key=int):
+        ints = [v for t in NET_TENSORS for v in net[h][t]["ints"]]
+        scales = ", ".join(repr(float(net[h][t]["scale"])) for t in NET_TENSORS)
+        rows.append(f'    {int(h)}: ("{_hex16(ints)}", ({scales})),')
+    return EV_NET.format(
+        windows=tuple(ev.params["windows"]),
+        coefs=coefs,
+        beta=beta,
+        nu=_nu(ev.nu),
+        shapes=repr(shapes),
+        net="\n".join(rows),
+        origin=origin,
+    )
 
 
 def _nu(nu: Mapping[int, float]) -> str:

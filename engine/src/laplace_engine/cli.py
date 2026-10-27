@@ -55,6 +55,9 @@ def build_parser() -> argparse.ArgumentParser:
     extend.add_argument(
         "--sense-baselines", action="store_true", help="also add RV-HAR and IV-HAR fitted on the run's search window"
     )
+    extend.add_argument(
+        "--learned", action="store_true", help="also add EV-NET, EV-HAR corrected by a small network per horizon"
+    )
     extend.add_argument("--global-pool", default="demon-plus", help="name of the pool with one set of weights")
     extend.add_argument("--horizon-pool", default="demon-h", help="name of the pool with weights per horizon")
 
@@ -149,6 +152,8 @@ def cmd_extend(args: argparse.Namespace) -> int:
                 programs = (*programs, program)
             elif program.source != known[program.name].source:
                 log.warning("%s: keeping %s's program; this run's fit differs", program.name, base.name)
+    if args.learned and "ev-net" not in {p.name for p in programs}:
+        programs = (*programs, *fit.learned_programs(args.run))
     windows = fit.run_windows(args.run, programs, workers=args.workers)
     everyone = {p.name: windows.validation[p.name] for p in programs}
     plus = release.Pool(args.global_pool, fit.fit_weights(everyone, windows.realized_validation, HORIZONS))
@@ -177,7 +182,8 @@ def cmd_extend(args: argparse.Namespace) -> int:
     candidates = {pool.name: fit.mix(holdout, pool.weights_at) for pool in extended.pools}
     # Programs new in this release are screened too, and against IV-HAR as well once the release has it.
     candidates |= {name: holdout[name] for name in added if name != "monkey"}
-    opponents = ("garch", "har", "iv-har") if "iv-har" in holdout else ("garch", "har")
+    # The classical opponents, then the senses-aware baselines this release has: EV-HAR is the bar for learned layers.
+    opponents = ("garch", "har", *(o for o in ("iv-har", "ev-har") if o in holdout))
     screening = {
         "run": args.run.name,
         "note": "holdout gains as development evidence (the holdout was inspected before; the live record is the test)",

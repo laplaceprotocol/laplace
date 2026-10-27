@@ -93,6 +93,8 @@ def compare(
         own = log_scores(forecasts, realized)
         out[name] = {}
         for opponent in opponents:
+            if opponent == name:
+                continue
             diff = own - log_scores(windows.holdout[opponent], realized)
             row = {}
             for scope, horizons in SCOPES.items():
@@ -130,3 +132,45 @@ def sense_baselines(run_dir: Path) -> list[Program]:
     sources = ladder_programs(rungs, panel.assets, where)
     names = ("rv-har", "iv-har", "ev-har")
     return [Program(n, sources[n], True, f"baseline fitted on {where}") for n in names if n in sources]
+
+
+def learned_programs(run_dir: Path) -> list[Program]:
+    """EV-NET, EV-HAR corrected by a small network per horizon, as a program: EV-HAR fitted on the run's search window,
+    the networks on every hour of it, keeping the weights that score best on every hour of the validation window."""
+    from laplace_engine.baselines import learned_program
+    from laplace_research.data.events import load as load_calendar
+    from laplace_research.evolve import learned
+    from laplace_research.evolve.baselines import ladder
+    from laplace_research.evolve.run import parse_utc
+
+    run = Run(run_dir)
+    config, panel = run.config, run.panel
+    if "rv" not in panel.senses:
+        raise ValueError(f"{run_dir.name}'s panel has no senses: run `laplace-research evolve senses` first")
+    fit = config.fit_times(panel)
+    start, end, _ = config.search
+    fit_range = slice(panel.index_at_or_after(parse_utc(start)), panel.index_at_or_after(parse_utc(end)))
+    rungs = ladder(
+        panel.close,
+        realized_bins(panel, fit.times),
+        fit.times,
+        fit_range,
+        senses=panel.senses,
+        assets=panel.assets,
+        ts=panel.ts,
+    )
+    ev = next(r for r in rungs if r.name == "ev-har")
+    validation = config.split(panel, "validation").times
+    fit_hours = np.arange(int(fit.times[0]), int(fit.times[-1]) + 1, dtype=np.int64)
+    valid_hours = np.arange(int(validation[0]), int(validation[-1]) + 1, dtype=np.int64)
+    panelwise = learned.Panelwise.of(panel.close, panel.high, panel.low, panel.senses, panel.assets)
+    model = learned.ev_net(
+        ev, panelwise, load_calendar(), panel.ts, fit_hours, valid_hours, lambda times: realized_bins(panel, times)
+    )
+    vstart, vend, _ = config.validation
+    where = (
+        f"{run_dir.name}'s search window ({start[:10]} to {end[:10]}), stopped on its validation window "
+        f"({vstart[:10]} to {vend[:10]})"
+    )
+    source = learned_program(ev, model.params["net"], panel.assets, where)
+    return [Program("ev-net", source, True, f"learned layer on EV-HAR, fitted on {where}")]
