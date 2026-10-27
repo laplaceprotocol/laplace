@@ -78,6 +78,11 @@ A release ([`engine/releases/r1/release.json`](../../engine/releases/r1/release.
   directory; evolved champions are private until revealed, and their identity is published from the first issue, so a
   revealed program can be matched to its whole record. Before every run the engine checks each source against the
   release.
+- **Parameter files.** A program whose model is too large for its source (EV-GBM's trees) carries a public parameter
+  file next to it: named arrays in canonical JSON, each with its dtype, shape and little-endian bytes in base64
+  ([`evolve/params.py`](../../research/src/laplace_research/evolve/params.py)). The program reads them as
+  `ctx.params`, read-only. Its identity is then `keccak256(abi.encode(keccak256(source), keccak256(parameter file)))`,
+  so it commits to every number; programs without one keep the keccak256 of their source.
 - **Pools** are linear pools of the release's programs with integer weights in parts per million, either one set for
   every horizon (`linear-pool`) or one set per horizon (`linear-pool-by-horizon`). A pool's identity is the keccak256
   of its canonical specification (members and weights), and its forecast is mixed from the members' *rounded*
@@ -165,8 +170,9 @@ and the root.
    `rootOf(issue)`, and the commitment's block falls inside the issue's window.
 2. The leaves rebuilt from `forecasts.json` give that root, and every pool's forecasts are its members' forecasts
    mixed with its weights. `laplace-engine verify --issue N` does steps 1 and 2 from the public files and the chain.
-3. Public programs rerun on the inputs the manifest identifies give the published forecasts (identical with the
-   locked dependencies; floating-point differences between library versions can move a rounding by a basis point).
+3. Public programs, with their parameter files, rerun on the inputs the manifest identifies give the published
+   forecasts (identical with the locked dependencies; floating-point differences between library versions can move a
+   rounding by a basis point).
 4. Once a private program is revealed, its source hashes to its identity, and rerunning it reproduces its record.
 
 ## What it does not claim

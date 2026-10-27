@@ -90,7 +90,7 @@ def run_release(
     failures: dict[str, str] = {}
     source = calendar.source if calendar is not None else None
     with Evaluator(path, workers=workers, calendar=source) as evaluator:
-        futures = {p.name: evaluator.submit(p.source, times, time_limit_s) for p in release.programs}
+        futures = {p.name: evaluator.submit(p.source, times, time_limit_s, p.params) for p in release.programs}
         for name, future in futures.items():
             try:
                 outcome = future.result()

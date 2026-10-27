@@ -1,6 +1,8 @@
 """Releases: the fixed set of forecasters the engine runs, and how each one is identified.
 
-A release lists programs and pools. A program is identified by the keccak256 of its source. Public sources live in
+A release lists programs and pools. A program is identified by the keccak256 of its source, or, when it comes with a
+parameter file (public arrays it reads as ``ctx.params``), by keccak256(abi.encode(keccak256(source),
+keccak256(params))). Public sources and parameter files live in
 this repository under the release's directory; private ones are kept outside it, and before every run their hashes are
 checked against the release file, so when a private program is revealed anyone can match it to its record. A pool is a
 linear pool of the release's programs with integer weights in parts per million; its identity is the keccak256 of its
@@ -42,10 +44,14 @@ class Program:
     source: str
     public: bool
     origin: str
+    params: bytes | None = None  # its parameter file (``evolve.params``), if any
 
     @property
     def id(self) -> bytes:
-        return bytes(keccak(self.source.encode()))
+        source = bytes(keccak(self.source.encode()))
+        if self.params is None:
+            return source
+        return bytes(keccak(source + bytes(keccak(self.params))))  # abi.encode of two bytes32: their concatenation
 
 
 Weights = tuple[tuple[str, int], ...]  # (program name, parts per million), summing to WEIGHT_SCALE
@@ -123,6 +129,8 @@ class Release:
 
     def __post_init__(self) -> None:
         names = [p.name for p in self.programs] + [p.name for p in self.pools]
+        if any(p.params is not None and not p.public for p in self.programs):
+            raise ValueError("parameter files are public: a private program cannot carry one")
         if len(set(names)) != len(names):
             raise ValueError("forecaster names must be unique within a release")
         for pool in self.pools:
@@ -148,10 +156,19 @@ class Release:
         out: list[dict[str, Any]] = []
         for p in self.programs:
             entry = {"name": p.name, "kind": "program", "id": hex32(p.id), "public": p.public, "origin": p.origin}
-            out.append(entry | ({"path": f"programs/{p.name}.py"} if p.public else {}))
+            if p.public:
+                entry["path"] = f"programs/{p.name}.py"
+            if p.params is not None:
+                entry["params"] = {"path": params_path(p.name), "keccak256": hex32(bytes(keccak(p.params)))}
+            out.append(entry)
         for pool in self.pools:
             out.append({"name": pool.name, "kind": "pool", "id": hex32(pool.id(programs)), "spec": pool.spec(programs)})
         return out
+
+
+def params_path(name: str) -> str:
+    """Where a program's parameter file lives, relative to its release directory."""
+    return f"programs/{name}.params.json"
 
 
 def write(release: Release, release_dir: Path, private_dir: Path) -> None:
@@ -162,6 +179,8 @@ def write(release: Release, release_dir: Path, private_dir: Path) -> None:
     for p in release.programs:
         path = release_dir / "programs" / f"{p.name}.py" if p.public else private_dir / f"{p.name}.py"
         path.write_bytes(p.source.encode())
+        if p.params is not None:
+            (release_dir / params_path(p.name)).write_bytes(p.params)
         if not p.public:
             os.chmod(path, 0o600)
     body = {"release": release.name, "notes": release.notes, "forecasters": release.describe()}
@@ -181,7 +200,14 @@ def load(release_dir: Path, private_dir: Path | None) -> Release:
                 raise ReleaseMismatch(f"{entry['name']} is private and no private directory was given")
             else:
                 path = private_dir / f"{entry['name']}.py"
-            program = Program(entry["name"], path.read_bytes().decode(), entry["public"], entry["origin"])
+            params = None
+            if "params" in entry:
+                if entry["params"]["path"] != params_path(entry["name"]):
+                    raise ReleaseMismatch(f"{entry['name']}: parameter file at {entry['params']['path']}")
+                params = (release_dir / params_path(entry["name"])).read_bytes()
+                if hex32(bytes(keccak(params))) != entry["params"]["keccak256"]:
+                    raise ReleaseMismatch(f"{entry['name']}: parameter file hash differs from the release")
+            program = Program(entry["name"], path.read_bytes().decode(), entry["public"], entry["origin"], params)
             if hex32(program.id) != entry["id"]:
                 raise ReleaseMismatch(f"{entry['name']}: source hash {hex32(program.id)} != release {entry['id']}")
             programs.append(program)

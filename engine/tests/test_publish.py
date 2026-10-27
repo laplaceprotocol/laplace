@@ -86,10 +86,16 @@ def test_publishes_a_release_once(tmp_path: Path) -> None:
     (release / "programs").mkdir(parents=True)
     (release / "release.json").write_text("{}")
     (release / "programs" / "naive.py").write_text("def forecast(ctx):\n    return [1] * 10\n")
+    (release / "programs" / "trees.params.json").write_text("{}")
     store, marker = FakeStore(), tmp_path / "data" / "r1.published"
     publish_release(store, release, "r1", marker)
-    assert set(store.objects) == {"v1/releases/r1/release.json", "v1/releases/r1/programs/naive.py"}
+    assert set(store.objects) == {
+        "v1/releases/r1/release.json",
+        "v1/releases/r1/programs/naive.py",
+        "v1/releases/r1/programs/trees.params.json",
+    }
     assert store.objects["v1/releases/r1/programs/naive.py"][1] == "text/x-python; charset=utf-8"
+    assert store.objects["v1/releases/r1/programs/trees.params.json"][1] == "application/json"
     again = FakeStore()
     publish_release(again, release, "r1", marker)
     assert not again.objects
