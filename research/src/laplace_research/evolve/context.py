@@ -7,12 +7,17 @@ announce in advance; what they announce is never in it.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
+from typing import Any
+
+import numpy as np
 
 from laplace_research.data.events import Events
 from laplace_research.evolve.feed import FloatArray, edges
 from laplace_research.evolve.lib import LIB, Lib
+from laplace_research.evolve.params import EMPTY
 
 LOOKBACK = 720
 HOUR = 3600
@@ -46,6 +51,8 @@ class Context:
     ``events`` lists the scheduled events (``data.events``: ``fomc``, ``cpi``, ``nfp``, ``us-open``, ``us-close``) from
     24 hours before to 48 hours after the forecast time, as (hours from the forecast time, kind), oldest first; one
     with ``0 <= hours < horizon`` happens inside the forecast's window. It is empty where the calendar does not reach.
+    ``params`` holds the program's parameter file (``evolve.params``), read-only; it is empty for a program without
+    one.
     """
 
     asset: str
@@ -63,6 +70,7 @@ class Context:
     senses: dict[str, FloatArray] = field(default_factory=dict)
     peer_senses: dict[str, dict[str, FloatArray]] = field(default_factory=dict)
     events: Events = ()
+    params: Mapping[str, np.ndarray[Any, Any]] = field(default_factory=lambda: EMPTY)
 
 
 def make_context(
@@ -72,6 +80,7 @@ def make_context(
     candle_open_ts: int,
     peer_senses: dict[str, dict[str, FloatArray]] | None = None,
     events: Events = (),
+    params: Mapping[str, np.ndarray[Any, Any]] = EMPTY,
 ) -> Context:
     """Assemble a context for ``asset`` from per-asset windows ending with the candle that opened at
     ``candle_open_ts``."""
@@ -93,4 +102,5 @@ def make_context(
         senses=(peer_senses or {}).get(asset, {}),
         peer_senses=peer_senses or {},
         events=events,
+        params=params,
     )

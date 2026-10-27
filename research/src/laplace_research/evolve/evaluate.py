@@ -26,6 +26,7 @@ from typing import Any
 import numpy as np
 
 from laplace_research.data import events
+from laplace_research.evolve import params as parameter_files
 from laplace_research.evolve.context import LOOKBACK
 from laplace_research.evolve.feed import HORIZONS, N_BINS, FloatArray, IntArray, bin_index
 from laplace_research.evolve.history import HistoryReader, ensure_history
@@ -116,7 +117,7 @@ class Outcome:
     seconds: float
 
 
-def _run(source: str, times: IntArray, time_limit_s: int) -> Outcome:
+def _run(source: str, times: IntArray, time_limit_s: int, params: bytes | None = None) -> Outcome:
     assert _HISTORY is not None
     if np.any(np.diff(times) < 0):
         raise ValueError("forecast times must be non-decreasing")
@@ -129,6 +130,10 @@ def _run(source: str, times: IntArray, time_limit_s: int) -> Outcome:
         calendar = events.load(_CALENDAR) if _CALENDAR is not None else events.EMPTY
     except Exception as exc:  # a broken calendar fails this evaluation, not the process that runs it
         return Outcome(None, f"calendar: {type(exc).__name__}: {exc}"[:400], 0.0)
+    try:
+        arrays = parameter_files.decode(params) if params is not None else parameter_files.EMPTY
+    except parameter_files.BadParams as exc:  # a broken parameter file fails its program, not the process
+        return Outcome(None, f"params: {exc}"[:400], 0.0)
     reader = HistoryReader(*_HISTORY, calendar=calendar)
     out = np.empty((len(reader.assets), len(HORIZONS), len(times), N_BINS))
     signal.alarm(time_limit_s)
@@ -137,7 +142,7 @@ def _run(source: str, times: IntArray, time_limit_s: int) -> Outcome:
             reader.advance_to(int(t))
             for a in range(len(reader.assets)):
                 for j, h in enumerate(HORIZONS):
-                    raw = np.asarray(fn(reader.context(a, int(t), h)), dtype=np.float64)
+                    raw = np.asarray(fn(reader.context(a, int(t), h, arrays)), dtype=np.float64)
                     if raw.shape != (N_BINS,) or not np.all(np.isfinite(raw)) or np.any(raw < 0) or raw.sum() <= 0:
                         return Outcome(None, f"bad output {np.array2string(raw, precision=3)[:200]}", 0.0)
                     out[a, j, n] = raw
@@ -171,12 +176,13 @@ class Evaluator:
             max_tasks_per_child=1,
         )
 
-    def submit(self, source: str, times: IntArray, time_limit_s: int) -> Any:
+    def submit(self, source: str, times: IntArray, time_limit_s: int, params: bytes | None = None) -> Any:
+        """Run ``source`` at ``times``; ``params`` is its parameter file, if it has one."""
         try:
-            return self._pool.submit(_run, source, times, time_limit_s)
+            return self._pool.submit(_run, source, times, time_limit_s, params)
         except BrokenProcessPool:
             self._pool = self._new_pool()
-            return self._pool.submit(_run, source, times, time_limit_s)
+            return self._pool.submit(_run, source, times, time_limit_s, params)
 
     def run(self, source: str, times: IntArray, time_limit_s: int) -> Outcome:
         try:

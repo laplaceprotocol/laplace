@@ -10,7 +10,9 @@ around their forecast time, from a calendar of publication times (``data.events`
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 
@@ -18,6 +20,7 @@ from laplace_research.data import events as calendar_data
 from laplace_research.evolve.context import HOUR, LOOKBACK, Candles, Context, make_context
 from laplace_research.evolve.feed import FloatArray, IntArray
 from laplace_research.evolve.panel import Panel, senses_path
+from laplace_research.evolve.params import EMPTY
 
 FIELDS = ("open", "high", "low", "close", "volume")
 
@@ -93,7 +96,9 @@ class HistoryReader:
             self._buffer.flags.writeable = False
         self._loaded = t + 1
 
-    def context(self, asset_index: int, t: int, horizon: int) -> Context:
+    def context(
+        self, asset_index: int, t: int, horizon: int, params: Mapping[str, np.ndarray[Any, Any]] = EMPTY
+    ) -> Context:
         if t >= self._loaded:
             raise ValueError(f"hour {t} has not been read yet; call advance_to first")
         if t + 1 < LOOKBACK:
@@ -106,4 +111,4 @@ class HistoryReader:
         }
         if self._events[0] != t:  # the same for every asset and horizon at one forecast time
             self._events = (t, self._calendar.around(int(self.ts[t]) + HOUR))
-        return make_context(peers, self.assets[asset_index], horizon, int(self.ts[t]), senses, self._events[1])
+        return make_context(peers, self.assets[asset_index], horizon, int(self.ts[t]), senses, self._events[1], params)
