@@ -165,13 +165,26 @@ class Run:
         return out
 
     @staticmethod
-    def init(run_dir: Path, cache_dir: Path, *, seed_code: str = SEED_PROGRAM, reference: str = "naive") -> Run:
-        """A new run: a fresh panel and every island seeded with ``seed_code``, scored against ``reference``."""
+    def init(
+        run_dir: Path,
+        cache_dir: Path,
+        *,
+        seed_code: str = SEED_PROGRAM,
+        reference: str = "naive",
+        panel: Panel | None = None,
+    ) -> Run:
+        """A new run: every island seeded with ``seed_code`` and scored against ``reference``, on a fresh panel or on
+        ``panel`` (another run's, senses included: a reference or seed that reads senses needs them)."""
         if (run_dir / "config.json").exists():
             raise FileExistsError(f"{run_dir} already initialized")
         run_dir.mkdir(parents=True)
-        config = replace(RunConfig.default(datetime.now(UTC) - timedelta(hours=1)), reference=reference)
-        panel = panel_mod.build(parse_utc(config.data_start), parse_utc(config.data_end), cache_dir)
+        if panel is None:
+            end = datetime.now(UTC) - timedelta(hours=1)
+        else:
+            end = datetime.fromtimestamp(int(panel.ts[-1]) + 3600, UTC)
+        config = replace(RunConfig.default(end), reference=reference)
+        if panel is None:
+            panel = panel_mod.build(parse_utc(config.data_start), parse_utc(config.data_end), cache_dir)
         panel.save(run_dir / "panel.npz")
         (run_dir / "config.json").write_text(json.dumps(asdict(config), indent=1))
         run = Run(run_dir)
