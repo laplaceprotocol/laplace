@@ -1,0 +1,59 @@
+{
+ "run": "evolve-refit2610",
+ "fit": [
+  "2025-02-01T00:00",
+  "2026-09-27T00:00"
+ ],
+ "stop": [
+  "2026-09-27T00:00",
+  "2026-10-27T00:00"
+ ],
+ "fit_hours": 14448,
+ "stop_hours": 696,
+ "ev_gbm": {
+  "settings": {
+   "objective": "multiclass",
+   "num_class": 10,
+   "learning_rate": 0.03,
+   "num_leaves": 15,
+   "min_data_in_leaf": 400,
+   "feature_fraction": 0.8,
+   "bagging_fraction": 0.8,
+   "bagging_freq": 1,
+   "lambda_l2": 10.0,
+   "seed": 0,
+   "deterministic": true,
+   "force_col_wise": true,
+   "num_threads": 4,
+   "verbose": -1
+  },
+  "max_rounds": 1500,
+  "patience": 100,
+  "rounds": {
+   "1": 89,
+   "4": 116,
+   "24": 66
+  }
+ },
+ "stopping_month_scores": {
+  "note": "mean log score per question on every fifth hour of the month the trees stopped on: in sample for the trees, a check that each program computes what research does",
+  "scores": {
+   "garch-r15": {
+    "program": -1.7717046403277288,
+    "research": -1.7717046403277288
+   },
+   "har-r15": {
+    "program": -1.773921970531426,
+    "research": -1.773916056483628
+   },
+   "ev-har-r15": {
+    "program": -1.7221990616041938,
+    "research": -1.7222043173130368
+   },
+   "ev-gbm-r15": {
+    "program": -1.7162763126958107,
+    "research": -1.7162802539359507
+   }
+  }
+ }
+}
