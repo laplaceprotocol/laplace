@@ -29,7 +29,7 @@ def build_parser() -> argparse.ArgumentParser:
     majors.add_argument("--agents", help="comma-separated model/directive ids (default: all)")
 
     evolve = sub.add_parser("evolve", help="evolutionary search over forecasting programs (PoC 2)")
-    evolve.add_argument("action", choices=["init", "run", "report", "senses", "events"])
+    evolve.add_argument("action", choices=["init", "run", "report", "senses", "events", "rolling"])
     evolve.add_argument("--run-id", required=True)
     evolve.add_argument("--generations", type=int, default=4)
     evolve.add_argument("--children", type=int, default=2, help="children per island per generation")
@@ -94,6 +94,22 @@ def main(argv: list[str] | None = None) -> int:
                 print()
                 print(render_screen(study["overlay_screen"]))
             (run_dir / "events.json").write_text(json.dumps(study, indent=1) + "\n")
+        elif args.action == "rolling":
+            import json
+            from datetime import UTC, datetime
+
+            from laplace_research.data import events
+            from laplace_research.evolve.rolling import render as render_rolling
+            from laplace_research.evolve.rolling import rolling
+
+            run = Run(run_dir)
+            first = datetime.fromisoformat(run.config.search[0]).replace(tzinfo=UTC)
+            end = datetime.fromtimestamp(int(run.panel.ts[-1]) + 3600, UTC)
+            boundaries = [datetime(2026, m, 1, tzinfo=UTC) for m in range(3, 13)]
+            boundaries = [b for b in boundaries if b < end] + [end]
+            result = rolling(run.panel, events.load(), first, boundaries)
+            (run_dir / "rolling.json").write_text(json.dumps(result, indent=1) + "\n")
+            print(render_rolling(result))
         elif args.action == "run":
             asyncio.run(Run(run_dir).evolve(args.generations, args.children, args.workers))
         else:

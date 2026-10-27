@@ -2,8 +2,8 @@
 
 For members' probabilities ``p[m, s]`` of the realized outcomes, the pool maximizes ``f(w) = mean_s log(w @ p[:, s])``
 over the simplex. With ``g_m = mean_s p[m, s] / (w @ p[:, s])``, concavity gives the certificate
-``f(w*) - f(w) <= max_m g_m - 1``, so the fit stops only when that gap is below a tolerance far smaller than the
-contributions being measured.
+``f(w*) - f(w) <= max_m g_m - 1``, whatever path the fit took to ``w``, so the fit stops only when that gap is below a
+tolerance far smaller than the contributions being measured.
 """
 
 from __future__ import annotations
@@ -16,6 +16,8 @@ import numpy as np
 from laplace_research.evolve.feed import FloatArray, IntArray
 
 DEFAULT_TOLERANCE = 1e-8
+ETA_GROWTH = 1.2  # over-relaxation grows by this factor after each step that raised the objective
+ETA_MAX = 1e6
 
 
 class PoolDidNotConverge(RuntimeError):
@@ -30,15 +32,36 @@ class PoolFit:
 
 
 def fit_pool(p: FloatArray, *, tolerance: float = DEFAULT_TOLERANCE, max_iterations: int = 200_000) -> PoolFit:
-    """EM for mixture weights. ``p``: members x samples, strictly positive (final forecasts are)."""
-    w = np.full(p.shape[0], 1.0 / p.shape[0])
+    """EM for mixture weights, adaptively over-relaxed. ``p``: members x samples, strictly positive (final forecasts
+    are).
+
+    EM multiplies each weight by ``g_m``; plain EM crawls when members are near-copies of each other. The
+    over-relaxed step multiplies it by ``g_m ** eta``: ``eta`` grows while steps raise the objective, and drops back
+    to 1, plain EM, which never lowers it, when a step would not (Salakhutdinov and Roweis, 2003). Weights are kept as
+    logarithms, so none underflows to an exact zero it could never leave.
+    """
+    log_w = np.full(p.shape[0], -np.log(p.shape[0]))
+    w = np.exp(log_w)
+    mixed = w @ p
+    objective = float(np.mean(np.log(mixed)))
+    eta = 1.0
     for i in range(max_iterations):
-        g = np.mean(p / (w @ p), axis=1)
+        g = np.mean(p / mixed, axis=1)
         gap = float(g.max() - 1.0)
         if gap <= tolerance:
             return PoolFit(w, gap, i)
-        w = w * g
-        w /= w.sum()
+        log_g = np.log(g)
+        while True:
+            step = log_w + eta * log_g
+            step -= np.logaddexp.reduce(step)
+            step_w = np.exp(step)
+            step_mixed = step_w @ p
+            step_objective = float(np.mean(np.log(step_mixed)))
+            if step_objective >= objective or eta == 1.0:
+                break
+            eta = 1.0
+        log_w, w, mixed, objective = step, step_w, step_mixed, step_objective
+        eta = min(eta * ETA_GROWTH, ETA_MAX)
     raise PoolDidNotConverge(f"gap {gap:.2e} after {max_iterations} iterations")
 
 

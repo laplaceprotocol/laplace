@@ -25,6 +25,28 @@ def test_training_contributions_are_nonnegative_at_the_certified_optimum() -> No
     assert contributions.min() >= -fit.gap
 
 
+def _near_copies(seed: int) -> np.ndarray:
+    """Realized-bin probabilities of 12 noisy forecasters of one truth; every third is a near-copy of the truth."""
+    rng = np.random.default_rng(seed)
+    truth = rng.dirichlet(np.full(N_BINS, 2.0), 4000)
+    realized = (truth.cumsum(axis=1) < rng.uniform(size=(len(truth), 1))).sum(axis=1)
+    members = []
+    for k in range(12):
+        logit = np.log(truth) * rng.uniform(0.5, 1.2) + rng.normal(0, 0.6 if k % 3 else 0.01, truth.shape)
+        prob = np.exp(logit) / np.exp(logit).sum(axis=1, keepdims=True)
+        members.append(0.99 * prob[np.arange(len(truth)), realized] + 0.001)
+    return np.stack(members)
+
+
+def test_near_copies_converge_in_few_steps_and_no_weighting_beats_the_certificate() -> None:
+    p = _near_copies(7)
+    fit = fit_pool(p, max_iterations=2_000)  # plain EM needs over 280,000 steps here
+    assert fit.gap <= 1e-8
+    best = np.mean(np.log(fit.weights @ p))
+    others = np.random.default_rng(8).dirichlet(np.full(len(p), 0.3), 2000)
+    assert (np.mean(np.log(others @ p), axis=1) <= best + fit.gap).all()
+
+
 def test_unconverged_fit_raises() -> None:
     p = np.random.default_rng(4).uniform(0.01, 1.0, (6, 400))
     with pytest.raises(PoolDidNotConverge):
