@@ -125,6 +125,17 @@ nats per 1- and 4-hour question, almost nine-tenths of the Demon's +0.0210, and 
 (+0.0276): development evidence, in [`screening.json`](../../engine/releases/r1.3/screening.json) and
 [the research note](../research/2026-10-25-scheduled-events.md).
 
+Release r1.4 (live from 2026-10-27) adds the first learned forecaster. **EV-NET** keeps EV-HAR's distribution
+and corrects its log-probabilities with a small network per horizon, whose 16-bit weights are part of the program.
+It is fitted on PoC 2's search window and stopped early on its validation window. Two more pools of every program
+include it: **demon-plus-n** and **demon-hn** (EV-NET gets 47% of demon-hn at 1 hour and almost nothing at 4 and
+24 hours, where EV-HAR keeps about half). r1.3's forecasters, identities and records are unchanged. Refitted before
+each month from April to October 2026, the network beat EV-HAR in every month, by +0.0084 nats per 1- and 4-hour
+question. This single fit, on data through May, adds +0.0007 on PoC 2's holdout and +0.0037 on every hour of it, while
+demon-hn is the best pool so far (+0.0299 over GARCH, +0.0114 over EV-HAR): development evidence, in
+[`screening.json`](../../engine/releases/r1.4/screening.json) and
+[the research note](../research/2026-10-27-learned-layer.md).
+
 The baselines run as ordinary programs on the same 720-hour window, so their recursions start from the window
 rather than from the start of the research panel, and HAR's 720-hour mean covers the window's 719 returns. Rerun over
 the PoC 2 holdout (11,487 questions), the naive, EWMA and GARCH programs match the research baselines to within
