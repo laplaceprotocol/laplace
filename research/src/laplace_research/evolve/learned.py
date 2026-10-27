@@ -51,7 +51,7 @@ NAMES = (
 )  # fmt: skip
 
 
-def _final(p: FloatArray) -> FloatArray:
+def final(p: FloatArray) -> FloatArray:
     """``feed.finalize``: normalize, then mix with the uniform distribution at weight ``FLOOR``."""
     out: FloatArray = (1 - FLOOR) * p / p.sum(axis=-1, keepdims=True) + FLOOR / N_BINS
     return out
@@ -84,11 +84,12 @@ class Panelwise:
         means = {w: trailing_mean(filled, w) for w in (1, 4, 24, 168, LONGEST)}
         implied = implied_hourly_variance(senses["dvol"], assets)
         implied = np.where(np.isfinite(implied), implied, means[LONGEST])
-        cum = np.cumsum(r, axis=1)
+        # log(close[t] / close[t - k]), as a program computes it: an unchanged price gives exactly 0 (a sum of hourly
+        # returns gives +-1e-15, and boosted trees split at +-1e-35 around zero).
         returns = {}
         for k in (1, 4, 24):
             out = np.zeros_like(r)
-            out[:, k:] = cum[:, k:] - cum[:, :-k]
+            out[:, k:] = np.log(close[:, k:] / close[:, :-k])
             returns[k] = out
         hl = np.log(high / low) ** 2 / (4 * math.log(2))
         parkinson = {w: trailing_mean(hl, w) for w in (1, 24)}
@@ -141,7 +142,7 @@ def inputs(
     return out
 
 
-def _softmax(z: FloatArray) -> FloatArray:
+def softmax(z: FloatArray) -> FloatArray:
     z = z - z.max(axis=-1, keepdims=True)
     e = np.exp(z)
     out: FloatArray = e / e.sum(axis=-1, keepdims=True)
@@ -220,7 +221,7 @@ def fit_net(
     def loss(theta: FloatArray, xs: FloatArray, lb: FloatArray, y: IntArray) -> tuple[float, FloatArray]:
         w1, b1, w2, b2 = unpack(theta)
         hid = np.tanh(xs @ w1 + b1)
-        p = _softmax(lb + hid @ w2 + b2)
+        p = softmax(lb + hid @ w2 + b2)
         n = len(y)
         value = -float(np.mean(np.log(p[np.arange(n), y]))) + L2 * float(np.sum(w1**2) + np.sum(w2**2))
         g = p.copy()
@@ -232,7 +233,7 @@ def fit_net(
 
     def score(theta: FloatArray) -> float:
         w1, b1, w2, b2 = unpack(theta)
-        p = _softmax(lbv + np.tanh(xvs @ w1 + b1) @ w2 + b2)
+        p = softmax(lbv + np.tanh(xvs @ w1 + b1) @ w2 + b2)
         return -float(np.mean(np.log(p[np.arange(len(yv)), yv])))
 
     best_value, best_theta = [score(theta0)], [theta0]
@@ -275,12 +276,12 @@ class Learned:
     params: dict[str, Any] = field(default_factory=dict)
 
     def probs(self, times: IntArray) -> FloatArray:
-        base = _final(self.ev.probs(times))  # [asset, horizon, sample, bin]
+        base = final(self.ev.probs(times))  # [asset, horizon, sample, bin]
         sd = self.ev.sd(times)
         out = np.empty_like(base)
         for j, h in enumerate(HORIZONS):
             x = inputs(self.panelwise, self.calendar, self.ts, times, sd[:, j], h)
-            out[:, j] = _softmax(np.log(base[:, j]) + self.nets[h].logits(x))
+            out[:, j] = softmax(np.log(base[:, j]) + self.nets[h].logits(x))
         return out
 
 
@@ -297,7 +298,7 @@ def ev_net(
     nets: dict[int, Net] = {}
     rows = {}
     for name, hours in (("fit", fit_hours), ("valid", valid_hours)):
-        rows[name] = (_final(ev.probs(hours)), ev.sd(hours), realized(hours))
+        rows[name] = (final(ev.probs(hours)), ev.sd(hours), realized(hours))
     for j, h in enumerate(HORIZONS):
         (bf, sf, yf), (bv, sv, yv) = rows["fit"], rows["valid"]
         x = inputs(panelwise, calendar, ts, fit_hours, sf[:, j], h).reshape(-1, len(NAMES))

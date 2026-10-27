@@ -8,8 +8,10 @@ The holdout has been inspected before, so this only screens candidates: their li
 
 from __future__ import annotations
 
+import calendar
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -45,7 +47,7 @@ def run_windows(run_dir: Path, programs: Sequence[Program], *, workers: int) -> 
     finals: dict[str, dict[str, FloatArray]] = {"validation": {}, "holdout": {}}
     with Evaluator(run_dir / "panel.npz", workers=workers) as evaluator:
         futures = {
-            (p.name, split.name): evaluator.submit(p.source, split.times, TIME_LIMIT_S)
+            (p.name, split.name): evaluator.submit(p.source, split.times, TIME_LIMIT_S, p.params)
             for p in programs
             for split in (validation, holdout)
         }
@@ -174,3 +176,102 @@ def learned_programs(run_dir: Path) -> list[Program]:
     )
     source = learned_program(ev, model.params["net"], panel.assets, where)
     return [Program("ev-net", source, True, f"learned layer on EV-HAR, fitted on {where}")]
+
+
+FIT_START = "2025-02-01T00:00"  # the first hour every fit uses, as in the rolling test
+REFITTED = ("garch", "har", "ev-har")
+
+
+def month_before(when: datetime) -> datetime:
+    """The same day and time one calendar month earlier (the last day of that month when it is shorter)."""
+    year, month = (when.year, when.month - 1) if when.month > 1 else (when.year - 1, 12)
+    return when.replace(year=year, month=month, day=min(when.day, calendar.monthrange(year, month)[1]))
+
+
+def refit_programs(
+    run_dir: Path, cutoff: datetime, suffix: str, *, workers: int
+) -> tuple[list[Program], dict[str, Any]]:
+    """EV-GBM, and GARCH, HAR and EV-HAR refitted on the same data, as the rolling test fits them for a month that
+    starts at ``cutoff``: every model on the hours from ``FIT_START`` to a month before ``cutoff`` (the trees, GARCH's
+    likelihood and EV-HAR's overlay on every hour, the HAR regressions and tails on every second hour), the trees
+    stopped on that last month. Program names get ``-suffix``. Also returns a record of the fit: its windows, the trees'
+    rounds, and every new program's score on the stopping month, run as a program and in research."""
+    from laplace_engine.baselines import gbm_program, ladder_programs
+    from laplace_research.data.events import load as load_calendar
+    from laplace_research.evolve import gbm, learned
+    from laplace_research.evolve import params as parameter_files
+    from laplace_research.evolve.baselines import ladder
+    from laplace_research.evolve.rolling import hours_between
+    from laplace_research.evolve.run import parse_utc
+
+    run = Run(run_dir)
+    panel = run.panel
+    if "rv" not in panel.senses:
+        raise ValueError(f"{run_dir.name}'s panel has no senses: run `laplace-research evolve senses` first")
+    if int(panel.ts[-1]) < int(cutoff.timestamp()):
+        raise ValueError(f"{run_dir.name}'s panel ends before {cutoff:%Y-%m-%d %H:%M}")
+    start, valid_from = parse_utc(FIT_START), month_before(cutoff)
+    fit_hours, valid_hours = hours_between(panel, start, valid_from), hours_between(panel, valid_from, cutoff)
+    if len(valid_hours) < 24 * 21:
+        raise ValueError(f"the panel ends before {cutoff:%Y-%m-%d %H:%M}: only {len(valid_hours)} stopping hours")
+    fit_times = fit_hours[::2]
+    rungs = ladder(
+        panel.close,
+        realized_bins(panel, fit_times),
+        fit_times,
+        slice(int(fit_hours[0]), int(fit_hours[-1]) + 1),
+        senses=panel.senses,
+        assets=panel.assets,
+        ts=panel.ts,
+    )
+    by_name = {r.name.split("(")[0]: r for r in rungs}
+    ev = by_name["ev-har"]
+    pw = learned.Panelwise.of(panel.close, panel.high, panel.low, panel.senses, panel.assets)
+    model = gbm.ev_gbm(ev, pw, load_calendar(), panel.ts, fit_hours, valid_hours, lambda t: realized_bins(panel, t))
+    stop = f"{valid_from:%Y-%m-%d %H:%M} to {cutoff:%Y-%m-%d %H:%M}"
+    where = f"{run_dir.name}'s panel from {FIT_START[:10]} to {valid_from:%Y-%m-%d %H:%M} UTC"
+    sources = ladder_programs(rungs, panel.assets, where)
+    programs = [Program(f"{n}-{suffix}", sources[n], True, f"baseline refitted on {where}") for n in REFITTED]
+    programs.append(
+        Program(
+            f"ev-gbm-{suffix}",
+            gbm_program(ev, panel.assets, f"{where}, the trees stopped on {stop} UTC"),
+            True,
+            f"boosted trees on EV-HAR, fitted on {where}, stopped on {stop} UTC",
+            parameter_files.encode(model.arrays()),
+        )
+    )
+    # Every new program runs in the sandbox on the stopping month and must score as research does.
+    check = valid_hours[::5]
+    research = {f"{n}-{suffix}": (by_name["har-rv"] if n == "har" else by_name[n]).probs(check) for n in REFITTED} | {
+        f"ev-gbm-{suffix}": model.probs(check)
+    }
+    realized = realized_bins(panel, check)
+    scores: dict[str, dict[str, float]] = {}
+    with Evaluator(run_dir / "panel.npz", workers=workers) as evaluator:
+        futures = {p.name: evaluator.submit(p.source, check, TIME_LIMIT_S, p.params) for p in programs}
+        for name, future in futures.items():
+            outcome = future.result()
+            if outcome.probs is None:
+                raise RuntimeError(f"{name} failed in the sandbox: {outcome.error}")
+            scores[name] = {
+                "program": float(log_scores(finalize(outcome.probs), realized).mean()),
+                "research": float(log_scores(finalize(research[name]), realized).mean()),
+            }
+    for name, s in scores.items():
+        if abs(s["program"] - s["research"]) > 1e-3:
+            raise RuntimeError(f"{name}: the program scores {s['program']:.5f}, research {s['research']:.5f}")
+    record = {
+        "run": run_dir.name,
+        "fit": [FIT_START, f"{valid_from:%Y-%m-%dT%H:%M}"],
+        "stop": [f"{valid_from:%Y-%m-%dT%H:%M}", f"{cutoff:%Y-%m-%dT%H:%M}"],
+        "fit_hours": len(fit_hours),
+        "stop_hours": len(valid_hours),
+        "ev_gbm": model.params["gbm"],
+        "stopping_month_scores": {
+            "note": "mean log score per question on every fifth hour of the month the trees stopped on: in sample for "
+            "the trees, a check that each program computes what research does",
+            "scores": scores,
+        },
+    }
+    return programs, record

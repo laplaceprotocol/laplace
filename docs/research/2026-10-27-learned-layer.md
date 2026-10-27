@@ -38,6 +38,12 @@ Each fold tests one calendar month: April to October 2026, seven folds, 4,784 te
 Gains are per forecast hour, averaged over the seven assets, in nats per question. Reproduce with
 `laplace-research evolve rolling --run-id senses2`.
 
+**Correction (2026-10-27, later).** Research now computes 4- and 24-hour returns as log price ratios, as programs
+do, rather than as sums of hourly returns (they differed by 1e-15 where a price came back to the same value).
+Rerun, EV-NET's pooled gain over EV-HAR is the same +0.0084 (1h +0.0169 instead of +0.0167) and no fold moves by
+more than 0.0003; EV-HAR and GARCH are unchanged. The numbers below are the original run's
+([the EV-GBM note](2026-10-27-ev-gbm.md) has the rerun).
+
 ### Results
 Gains in nats per question at 1 and 4 hours pooled, per fold (the month tested):
 

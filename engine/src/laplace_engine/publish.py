@@ -113,10 +113,15 @@ def publish_pending(store: Store, issues_dir: Path) -> list[int]:
 
 
 def publish_release(store: Store, release_dir: Path, name: str, marker: Path) -> None:
-    """Upload a release's file and public programs once."""
+    """Upload a release's file, public programs and parameter files once."""
     if marker.exists():
         return
-    files: Iterable[Path] = [release_dir / "release.json", *sorted((release_dir / "programs").glob("*.py"))]
+    programs = release_dir / "programs"
+    files: Iterable[Path] = [
+        release_dir / "release.json",
+        *sorted(programs.glob("*.py")),
+        *sorted(programs.glob("*.params.json")),
+    ]
     for path in files:
         key = f"{PREFIX}/releases/{name}/{path.relative_to(release_dir).as_posix()}"
         content_type = "application/json" if path.suffix == ".json" else "text/x-python; charset=utf-8"

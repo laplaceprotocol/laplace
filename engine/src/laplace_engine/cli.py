@@ -45,6 +45,15 @@ def build_parser() -> argparse.ArgumentParser:
     freeze.add_argument("--out", type=Path, required=True, help="release directory (public part, in the repo)")
     freeze.add_argument("--private", type=Path, required=True, help="where private program sources are kept")
 
+    refit = sub.add_parser("refit", help="add EV-GBM and GARCH, HAR and EV-HAR refitted on the same data to a release")
+    refit.add_argument("--from", dest="source", type=Path, required=True, help="the release to add to")
+    refit.add_argument("--private", type=Path, required=True)
+    refit.add_argument("--run", type=Path, required=True, help="research run whose panel (with senses) is fitted")
+    refit.add_argument("--cutoff", required=True, help="UTC hour the fitted data ends, e.g. 2026-10-27T00:00")
+    refit.add_argument("--suffix", required=True, help="appended to the new programs' names, e.g. r15")
+    refit.add_argument("--name", required=True)
+    refit.add_argument("--out", type=Path, required=True)
+    refit.add_argument("--workers", type=int, default=min(8, os.cpu_count() or 1))
     extend = sub.add_parser("extend", help="add shadow forecasters to a release: the monkey and pools fitted on a run")
     extend.add_argument("--from", dest="source", type=Path, required=True, help="the release to extend")
     extend.add_argument("--private", type=Path, required=True)
@@ -133,6 +142,32 @@ def judging_entries(paths: list[Path], alerts: notify.Alerts) -> list[dict[str, 
         name = resolved.relative_to(REPO).as_posix() if resolved.is_relative_to(REPO) else resolved.name
         entries.append({"path": name, "keccak256": "0x" + bytes(keccak(resolved.read_bytes())).hex()})
     return entries
+
+
+def cmd_refit(args: argparse.Namespace) -> int:
+    """Release ``--name``: every forecaster of ``--from`` unchanged, plus EV-GBM and GARCH, HAR and EV-HAR refitted
+    on the same data (``fit.refit_programs``), with a record of the fit in ``fit.json``."""
+    from laplace_engine import fit
+    from laplace_research.evolve.run import parse_utc
+
+    base = release.load(args.source, args.private)
+    added, record = fit.refit_programs(args.run, parse_utc(args.cutoff), args.suffix, workers=args.workers)
+    notes = (
+        f"{base.name}'s forecasters unchanged, plus {', '.join(p.name for p in added)}: EV-GBM, EV-HAR corrected by "
+        "boosted trees (its trees are in its parameter file), and GARCH, HAR and EV-HAR refitted on the same data. All "
+        f"are fitted on {args.run.name}'s panel from {record['fit'][0][:10]} to {record['fit'][1]} UTC as the rolling "
+        f"test fits them, the trees stopped on the month after, to {record['stop'][1]} UTC. Exploratory until a rule "
+        "judges them."
+    )
+    extended = release.Release(args.name, notes, (*base.programs, *added), base.pools)
+    release.write(extended, args.out, args.private)
+    (args.out / "fit.json").write_text(json.dumps(record, indent=1) + "\n")
+    for name, score in record["stopping_month_scores"]["scores"].items():
+        print(f"{name:14s} stopping month: program {score['program']:.5f}, research {score['research']:.5f}")
+    print("EV-GBM rounds per horizon:", record["ev_gbm"]["rounds"])
+    for name, identity in extended.ids().items():
+        print(f"{name:14s} {release.hex32(identity)}")
+    return 0
 
 
 def cmd_extend(args: argparse.Namespace) -> int:
@@ -630,6 +665,7 @@ def main(argv: list[str] | None = None) -> int:
     commands = {
         "release": cmd_release,
         "extend": cmd_extend,
+        "refit": cmd_refit,
         "issue": cmd_issue,
         "verify": cmd_verify,
         "scoreboard": cmd_scoreboard,

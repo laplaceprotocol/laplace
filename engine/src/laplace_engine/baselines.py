@@ -519,3 +519,109 @@ def ladder_programs(ladder: Sequence[Baseline], assets: Sequence[str], origin: s
             senses_rv=SENSES_RV,
         )
     return programs
+
+
+def _between(text: str, start: str, end: str) -> str:
+    return text[text.index(start) : text.index(end)]
+
+
+# EV-GBM's program shares EV-NET's code for EV-HAR and the inputs, character for character.
+EV_GBM = (
+    """\
+import math
+import numpy as np
+
+WINDOWS = {windows!r}
+HOURS_PER_YEAR = 8760
+RELEASES = ("fomc", "cpi", "nfp")
+FLOOR = 0.001  # final forecasts mix in the uniform distribution at this weight
+ASSETS = {assets!r}
+# EV-HAR, exactly as in its own program: per asset and horizon its intercept, one coefficient per window of 5-minute
+# realized variance and one for the DVOL-implied variance (COEFS); its overlay's coefficients (BETA); its tails (NU).
+# Then boosted trees per horizon that correct EV-HAR's log-probabilities, in the program's parameter file: for horizon
+# h, ctx.params holds "h<h>.root", ".feature", ".threshold", ".left", ".right" and ".value". All fitted on {origin}.
+COEFS = {{
+{coefs}
+}}
+BETA = {beta}
+NU = {nu}
+
+
+"""
+    + _between(EV_NET, "def _filled_of(", "def _tensors(")
+    + _between(EV_NET, "def _net_inputs(", "def forecast(")
+    + '''\
+def _walk(params, h, x):
+    """Per bin, the sum of the leaves that inputs x reach in horizon h's trees. A node sends x left when
+    x[feature] <= threshold; a child c >= 0 is a node, c < 0 is leaf ~c; tree t adds its leaf to bin t % 10."""
+    feature, threshold = params[f"h{{h}}.feature"], params[f"h{{h}}.threshold"]
+    left, right, value = params[f"h{{h}}.left"], params[f"h{{h}}.right"], params[f"h{{h}}.value"]
+    node = np.array(params[f"h{{h}}.root"])
+    inner = node >= 0
+    while inner.any():
+        k = np.where(inner, node, 0)
+        node = np.where(inner, np.where(x[feature[k]] <= threshold[k], left[k], right[k]), node)
+        inner = node >= 0
+    return value[~node].reshape(-1, 10).sum(axis=0)
+
+
+def _ev_har(ctx):
+    """EV-HAR's standard deviation and its final distribution, as in its own program."""
+    filled = _filled(ctx)
+    means = [float(np.mean(filled[-w:])) for w in WINDOWS]
+    implied = _implied(ctx)
+    if not math.isfinite(implied):
+        implied = means[3]
+    c = COEFS[ctx.asset][ctx.horizon]
+    var = c[0] + (sum(k * m for k, m in zip(c[1:5], means)) + c[5] * implied) * ctx.horizon
+    floor = 0.1 * means[2] * ctx.horizon
+    scale = math.exp(0.5 * sum(b * x for b, x in zip(BETA[ctx.horizon], _inputs(ctx))))
+    sd = math.sqrt(max(var, floor)) * scale
+    base = np.asarray(ctx.lib.student_t_probs(sd, NU[ctx.horizon], ctx.edges), dtype=np.float64)
+    return sd, (1 - FLOOR) * base / base.sum() + FLOOR / len(base)
+
+
+def forecast(ctx):
+    """EV-GBM: EV-HAR's distribution, corrected by boosted trees trained on the binned log score."""
+    sd, base = _ev_har(ctx)
+    x = np.array([*_net_inputs(ctx, sd), ASSETS.index(ctx.asset), ctx.hour, ctx.weekday], dtype=np.float64)
+    logits = np.log(base) + _walk(ctx.params, ctx.horizon, x)
+    p = np.exp(logits - logits.max())
+    return p / p.sum()
+'''
+)
+
+
+def _coefs(rung: Baseline, assets: Sequence[str]) -> str:
+    return "\n".join(
+        f"    {asset!r}: {{\n"
+        + "".join(
+            f"        {h}: ({', '.join(repr(float(c)) for c in by_h[str(h)])}),\n" for h in sorted(map(int, by_h))
+        )
+        + "    },"
+        for asset, by_h in zip(assets, rung.params["per_asset"], strict=True)
+    )
+
+
+def _beta(rung: Baseline) -> str:
+    return (
+        "{\n"
+        + "".join(
+            f"    {h}: ({', '.join(repr(float(v)) for v in rung.params['overlay'][str(h)]['beta'])}),\n"
+            for h in sorted(map(int, rung.params["overlay"]))
+        )
+        + "}"
+    )
+
+
+def gbm_program(ev: Baseline, assets: Sequence[str], origin: str) -> str:
+    """Source code for EV-GBM from a fitted EV-HAR. Its trees are not in the source: they go in the program's parameter
+    file (``Gbm.arrays()``, encoded by ``evolve.params``)."""
+    return EV_GBM.format(
+        windows=tuple(ev.params["windows"]),
+        assets=tuple(assets),
+        coefs=_coefs(ev, assets),
+        beta=_beta(ev),
+        nu=_nu(ev.nu),
+        origin=origin,
+    )

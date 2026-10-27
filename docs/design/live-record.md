@@ -78,6 +78,11 @@ A release ([`engine/releases/r1/release.json`](../../engine/releases/r1/release.
   directory; evolved champions are private until revealed, and their identity is published from the first issue, so a
   revealed program can be matched to its whole record. Before every run the engine checks each source against the
   release.
+- **Parameter files.** A program whose model is too large for its source (EV-GBM's trees) carries a public parameter
+  file next to it: named arrays in canonical JSON, each with its dtype, shape and little-endian bytes in base64
+  ([`evolve/params.py`](../../research/src/laplace_research/evolve/params.py)). The program reads them as
+  `ctx.params`, read-only. Its identity is then `keccak256(abi.encode(keccak256(source), keccak256(parameter file)))`,
+  so it commits to every number; programs without one keep the keccak256 of their source.
 - **Pools** are linear pools of the release's programs with integer weights in parts per million, either one set for
   every horizon (`linear-pool`) or one set per horizon (`linear-pool-by-horizon`). A pool's identity is the keccak256
   of its canonical specification (members and weights), and its forecast is mixed from the members' *rounded*
@@ -136,6 +141,16 @@ demon-hn is the best pool so far (+0.0299 over GARCH, +0.0114 over EV-HAR): deve
 [`screening.json`](../../engine/releases/r1.4/screening.json) and
 [the research note](../research/2026-10-27-learned-layer.md).
 
+Release r1.5 (live from 2026-10-27) adds **EV-GBM** (`ev-gbm-r15`), EV-HAR corrected by boosted trees and the
+first program with a parameter file, together with GARCH, HAR and EV-HAR refitted on the same data
+(`garch-r15`, `har-r15`, `ev-har-r15`). All four are fitted on every hour of a fresh panel from 2025-02-01 to
+2026-09-27, the trees stopped on the month after, to 2026-10-27
+([`fit.json`](../../engine/releases/r1.5/fit.json), `laplace-engine refit`). r1.4's forecasters, identities and
+records are unchanged, and r1.5 adds no pools. Refitted before each month from April to October 2026, EV-GBM beat
+EV-HAR in every month, by +0.0150 nats per 1- and 4-hour question, and GARCH by +0.0317. Every model, classical or
+learned, loses about 0.002 a month against a refit, which is why its opponents are fitted on the same data:
+development evidence, in [the research note](../research/2026-10-27-ev-gbm.md).
+
 The baselines run as ordinary programs on the same 720-hour window, so their recursions start from the window
 rather than from the start of the research panel, and HAR's 720-hour mean covers the window's 719 returns. Rerun over
 the PoC 2 holdout (11,487 questions), the naive, EWMA and GARCH programs match the research baselines to within
@@ -165,8 +180,9 @@ and the root.
    `rootOf(issue)`, and the commitment's block falls inside the issue's window.
 2. The leaves rebuilt from `forecasts.json` give that root, and every pool's forecasts are its members' forecasts
    mixed with its weights. `laplace-engine verify --issue N` does steps 1 and 2 from the public files and the chain.
-3. Public programs rerun on the inputs the manifest identifies give the published forecasts (identical with the
-   locked dependencies; floating-point differences between library versions can move a rounding by a basis point).
+3. Public programs, with their parameter files, rerun on the inputs the manifest identifies give the published
+   forecasts (identical with the locked dependencies; floating-point differences between library versions can move a
+   rounding by a basis point).
 4. Once a private program is revealed, its source hashes to its identity, and rerunning it reproduces its record.
 
 ## What it does not claim

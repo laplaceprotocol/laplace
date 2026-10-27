@@ -28,3 +28,13 @@ def test_mix_uses_each_horizon_s_weights() -> None:
     assert mixed[:, 0] == pytest.approx(a[:, 0])
     assert mixed[:, 1] == pytest.approx(b[:, 1])
     assert mixed[:, 2] == pytest.approx((a[:, 2] + b[:, 2]) / 2)
+
+
+def test_the_stopping_month_starts_one_calendar_month_before_the_cutoff() -> None:
+    from datetime import UTC, datetime
+
+    from laplace_engine.fit import month_before
+
+    assert month_before(datetime(2026, 10, 27, tzinfo=UTC)) == datetime(2026, 9, 27, tzinfo=UTC)
+    assert month_before(datetime(2026, 3, 31, 6, tzinfo=UTC)) == datetime(2026, 2, 28, 6, tzinfo=UTC)
+    assert month_before(datetime(2027, 1, 15, tzinfo=UTC)) == datetime(2026, 12, 15, tzinfo=UTC)
