@@ -10,6 +10,10 @@ dependencies = [
   "scipy>=1.14",
 ]
 
+[project.optional-dependencies]
+# Fitting EV-GBM (evolve.gbm). Frozen EV-GBM programs walk their trees with numpy and never need it.
+gbm = ["lightgbm>=4.7"]
+
 [dependency-groups]
 dev = [
   "mypy>=1.11",
@@ -45,5 +49,5 @@ testpaths = ["tests"]
 addopts = "-q"
 
 [[tool.mypy.overrides]]
-module = ["scipy", "scipy.*"]
+module = ["scipy", "scipy.*", "lightgbm", "lightgbm.*"]
 ignore_missing_imports = true

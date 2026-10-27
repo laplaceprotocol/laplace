@@ -34,6 +34,9 @@ def build_parser() -> argparse.ArgumentParser:
     evolve.add_argument("--generations", type=int, default=4)
     evolve.add_argument("--children", type=int, default=2, help="children per island per generation")
     evolve.add_argument("--workers", type=int, default=8, help="evaluation processes")
+    evolve.add_argument(
+        "--ages", action="store_true", help="rolling: also score every fit on every later month (rolling-ages.json)"
+    )
     return parser
 
 
@@ -107,8 +110,9 @@ def main(argv: list[str] | None = None) -> int:
             end = datetime.fromtimestamp(int(run.panel.ts[-1]) + 3600, UTC)
             boundaries = [datetime(2026, m, 1, tzinfo=UTC) for m in range(3, 13)]
             boundaries = [b for b in boundaries if b < end] + [end]
-            result = rolling(run.panel, events.load(), first, boundaries)
-            (run_dir / "rolling.json").write_text(json.dumps(result, indent=1) + "\n")
+            result = rolling(run.panel, events.load(), first, boundaries, ages=args.ages)
+            name = "rolling-ages.json" if args.ages else "rolling.json"
+            (run_dir / name).write_text(json.dumps(result, indent=1) + "\n")
             print(render_rolling(result))
         elif args.action == "run":
             asyncio.run(Run(run_dir).evolve(args.generations, args.children, args.workers))
