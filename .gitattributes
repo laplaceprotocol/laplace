@@ -1,3 +1,5 @@
 # A release's programs and parameter files are identified by the hash of their exact bytes: no line-ending
 # conversion on any platform.
 engine/releases/** -text
+# An issue kept as a test fixture, byte for byte as published: its hashes are checked against the chain's.
+site/test/fixtures/issue-*/** -text
