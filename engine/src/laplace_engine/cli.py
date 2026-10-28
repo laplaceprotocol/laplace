@@ -102,6 +102,13 @@ def build_parser() -> argparse.ArgumentParser:
     board.add_argument("--data", type=Path, required=True)
     board.add_argument("--horizon", type=int, choices=HORIZONS, help="gains at one horizon instead of overall")
 
+    look = sub.add_parser("look", help="a pre-registered rule's scheduled look, or its day-30 direction report")
+    look.add_argument("--rule", required=True, help="r1 or r2 (docs/judging)")
+    look.add_argument("--day", type=int, required=True, choices=[30, 90, 180, 365])
+    look.add_argument("--data", type=Path, required=True)
+    look.add_argument("--json", type=Path, help="also write the result as JSON")
+    look.add_argument("--preview", action="store_true", help="compute before the look's time, labelled a preview")
+
     alert = sub.add_parser("alert", help="report a crashed hourly run (systemd OnFailure)")
     alert.add_argument("--unit", default="laplace-issue.service")
 
@@ -624,6 +631,24 @@ def cmd_verify(args: argparse.Namespace) -> int:
     return 0 if all(checks.values()) else 1
 
 
+def cmd_look(args: argparse.Namespace) -> int:
+    """A rule's look: refused before the time the rule sets for it, unless asked for as a labelled preview."""
+    from laplace_engine import looks
+
+    rule = looks.rule_named(args.rule)
+    after = looks.computed_after(rule, args.day)
+    preview = datetime.now(UTC) < after
+    if preview and not args.preview:
+        print(f"{rule['rule']}, day {args.day}: computed after {after:%Y-%m-%d %H:%M} UTC (--preview for a preview)")
+        return 2
+    result = looks.look(settle.load_settlements(args.data / "issues"), rule, args.day)
+    result["preview"] = preview
+    print(looks.render(result, preview=preview), end="")
+    if args.json:
+        args.json.write_text(json.dumps(result, indent=1) + "\n")
+    return 0
+
+
 def cmd_scoreboard(args: argparse.Namespace) -> int:
     board = settle.scoreboard(settle.load_settlements(args.data / "issues"))
     scope = f"at {args.horizon}h" if args.horizon else "over issues settled at every horizon"
@@ -672,6 +697,7 @@ def main(argv: list[str] | None = None) -> int:
         "release": cmd_release,
         "extend": cmd_extend,
         "refit": cmd_refit,
+        "look": cmd_look,
         "issue": cmd_issue,
         "verify": cmd_verify,
         "scoreboard": cmd_scoreboard,
