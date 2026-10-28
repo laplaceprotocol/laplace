@@ -1,0 +1,25 @@
+name: site
+
+on:
+  push:
+    branches: [main]
+    paths: ["site/**", "docs/corrections.md", "contracts/test/vectors/**", "engine/releases/**", ".github/workflows/site.yml"]
+  pull_request:
+    paths: ["site/**", "docs/corrections.md", "contracts/test/vectors/**", "engine/releases/**", ".github/workflows/site.yml"]
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    working-directory: site
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+      - run: npm test
