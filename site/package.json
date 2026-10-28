@@ -1,0 +1,10 @@
+{
+  "name": "laplace-site",
+  "private": true,
+  "type": "module",
+  "description": "The public live page at laplaceprotocol.com: static files that read the public record and the ledger.",
+  "scripts": {
+    "test": "node --test",
+    "preview": "node preview.mjs"
+  }
+}
