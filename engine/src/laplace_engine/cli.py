@@ -541,6 +541,12 @@ def cmd_digest(args: argparse.Namespace) -> int:
             lines.append(f"Demon vs {base.upper()}: " + (", ".join(cells) if cells else "nothing settled yet"))
         if demon["vs"].get("garch", {}).get("interval95") is None:
             lines.append(f"(Directions only: intervals appear after {2 * settle.BLOCK_ISSUES} fully settled issues.)")
+    for rule in board.get("rules", []):
+        cells = []
+        for opponent, s in rule["vs"].items():
+            gain = "none yet" if s["mean"] is None else f"{s['mean']:+.4f} (n={s['issues']})"
+            cells.append(f"vs {opponent} {gain}")
+        lines.append(f"{rule['rule']} ({rule['judged']['name']}, 1h+4h, running): " + ", ".join(cells))
     try:
         ledger = chain.Ledger(chain.RPC(args.rpc.split(",")), args.ledger)
         key_file = os.environ.get("LAPLACE_COMMIT_KEY_FILE")

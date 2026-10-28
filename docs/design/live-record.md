@@ -64,8 +64,10 @@ settles on the exchange's public candle instead, so a missing hour can never hid
 names its source either way. The committed prices themselves can be checked against the exchange's public candles.
 
 Release r1 is judged by [a pre-registered rule](../judging/r1.md): the Demon against GARCH and HAR on the 1- and
-4-hour questions, with looks at 90, 180 and 365 days; the scoreboard shows its statistic as "running, unresolved"
-between looks.
+4-hour questions, with looks at 90, 180 and 365 days. Release r1.5's EV-GBM is judged by [rule r2](../judging/r2.md):
+against GARCH and HAR (claim A) and EV-HAR (claim B), all refitted on the same data, from issue 498095, with the
+same looks. The scoreboard shows each rule's statistic as "running, unresolved" between looks (`rules` in
+`scoreboard.json`).
 
 The scoreboard lists each forecaster's mean log score (overall and by horizon) and its paired gain over the naive,
 GARCH and HAR baselines on the questions both answered, issues weighted equally, with a 95% circular block-bootstrap
