@@ -33,7 +33,8 @@ ETH, SOL, XRP, DOGE, AVAX and LINK over ten bins. The hour's Merkle root is comm
 - **Pre-committed:** forecasts are hashed into an hourly Merkle root on-chain before they settle. Nobody can backdate a call.
 - **Open scoring:** the scoring rules and a reference verifier live in this repo. Anyone can recompute any forecaster's record.
 - **Honest baselines:** naive volatility, EWMA, GARCH and HAR face the same questions, with public code.
-- **Corrections in the open:** when we find a mistake, the fix and the numbers it replaces stay side by side.
+- **Corrections in the open:** when we find a mistake, the fix and the numbers it replaces stay side by side
+  ([the log](docs/corrections.md)).
 
 ## Repository
 | | |
