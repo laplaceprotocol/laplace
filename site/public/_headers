@@ -1,7 +1,7 @@
 # Cloudflare static-asset headers. The page may only talk to the public record and the two public RPC endpoints the
-# ledger is read through ('self' covers the local preview, which proxies the record).
+# ledger is read through.
 /*
-  Content-Security-Policy: default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self'; connect-src 'self' https://data.laplaceprotocol.com https://rpc.mainnet.chain.robinhood.com https://robinhood.drpc.org; base-uri 'none'; form-action 'none'; frame-ancestors 'none'
+  Content-Security-Policy: default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self'; connect-src https://data.laplaceprotocol.com https://rpc.mainnet.chain.robinhood.com https://robinhood.drpc.org; base-uri 'none'; form-action 'none'; frame-ancestors 'none'
   X-Content-Type-Options: nosniff
   Referrer-Policy: no-referrer
   Permissions-Policy: camera=(), microphone=(), geolocation=()

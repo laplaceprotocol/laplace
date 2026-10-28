@@ -14,12 +14,14 @@ record.py`, `quantize.py`, `verify.py`) and are tested against the shared vector
 | `public/js/chain.js` | `rootOf`, the `Committed` event and `verifyForecast`, read from public RPC endpoints |
 | `public/js/odds.js`, `status.js`, `scores.js`, `check.js` | the sections; `content.js` holds the rules' terms and the ladder, copied from the docs they link to |
 | `public/_headers` | the Content-Security-Policy: scripts and styles from the page only, connections to the record and the RPCs only |
-| `preview.mjs` | a local preview that serves `public/` and proxies the record |
 
 ```bash
 npm test                                   # node --test, no dependencies
-node preview.mjs --port 8787               # http://127.0.0.1:8787/
+npx wrangler@4 dev                         # http://localhost:8787/, with the headers it will be served with
 ```
+
+The page reads the live record from the browser, so a local copy only works once the record answers other origins
+(step 1 below).
 
 ## Deploying
 Not deployed yet. It is a Worker with static assets and no code, on the Laplace account. Before the first deploy:
@@ -28,6 +30,5 @@ Not deployed yet. It is a Worker with static assets and no code, on the Laplace 
    `data.laplaceprotocol.com` must answer `GET` and `HEAD` from any origin (`Access-Control-Allow-Origin: *`; the
    record is public). Check that cached files carry the header too:
    `curl -sI -H 'Origin: https://laplaceprotocol.com' https://data.laplaceprotocol.com/v1/issues/498103/manifest.json`.
-   The preview proxies the record instead, so it works without this.
 2. **Deploy.** `CLOUDFLARE_ACCOUNT_ID=… CLOUDFLARE_API_TOKEN=… npx wrangler@4 deploy` from this directory. The custom
    domain route creates the `laplaceprotocol.com` DNS record on the first deploy.
