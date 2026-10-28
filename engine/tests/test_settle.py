@@ -159,3 +159,30 @@ def test_the_primary_statistic_needs_both_horizons_for_every_asset() -> None:
     assert primary["mean"] == pytest.approx(0.05, abs=0.01)
     assert primary["z"]["72"] > 5
     assert primary["z"]["168"] is None  # fewer than two 168-issue blocks
+
+
+def test_each_rule_runs_from_its_start_issue_by_identity() -> None:
+    from laplace_engine.settle import RULES, rule_statistics
+
+    judged, opponent = "0x" + "1" * 64, "0x" + "2" * 64
+    rule = {
+        "rule": "docs/judging/rx.md",
+        "start_issue": 7_010,
+        "judged": ("x", judged),
+        "opponents": (("y", opponent),),
+    }
+    scores: dict[str, dict[tuple[int, int, str], float]] = {judged: {}, opponent: {}}
+    expected = {}
+    for issue in range(7_000, 7_100):
+        for h in (1, 4, 24):
+            expected[(issue, h)] = len(ASSETS)
+            for a in ASSETS:
+                scores[judged][(issue, h, a)] = -2.0 + (0.5 if issue < 7_010 else 0.02)  # before the start: ignored
+                scores[opponent][(issue, h, a)] = -2.0
+    (stat,) = rule_statistics(scores, expected, (rule,))
+    assert stat["status"] == "running, unresolved"
+    assert stat["judged"] == {"name": "x", "id": judged}
+    assert stat["vs"]["y"]["issues"] == 90
+    assert stat["vs"]["y"]["mean"] == pytest.approx(0.02)
+    assert [r["rule"] for r in RULES] == ["docs/judging/r1.md", "docs/judging/r2.md"]
+    assert all(len(ident) == 66 for r in RULES for _, ident in (r["judged"], *r["opponents"]))

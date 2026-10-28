@@ -39,6 +39,29 @@ BLOCK_ISSUES = 72  # bootstrap blocks of 72 hourly issues, as in research
 CHECK_BLOCK_ISSUES = 168  # the pre-registered rule's second block length
 MIN_BLOCKS = 2  # below two blocks of issues, no interval is shown
 BASELINES = ("naive", "garch", "har")
+# The pre-registered rules (docs/judging): the judged forecaster and its opponents by identity, from the rule's
+# start issue. The scoreboard shows each one's statistic as it runs; only a scheduled look gives a verdict.
+RULES = (
+    {
+        "rule": "docs/judging/r1.md",
+        "start_issue": 498020,
+        "judged": ("demon", "0x97bc9657cb5b4af73b46e0031ac385cab039e72fb9fb8edf591bd457f149914e"),
+        "opponents": (
+            ("garch", "0xdf33f0170700f1581334e893a7d08329d5a407c5b0e2913a2c4b9903c7fbe814"),
+            ("har", "0x564e31cf84b39fb54ab6fe6e61213eaf70f7cccc792bde19321d357941662dc5"),
+        ),
+    },
+    {
+        "rule": "docs/judging/r2.md",
+        "start_issue": 498095,
+        "judged": ("ev-gbm-r15", "0xb968a022ac9be499bdd06a67a764ee53bdb38c606c7f8e1fc2748f1972845454"),
+        "opponents": (
+            ("garch-r15", "0xb15791e0ca9a42ca356baf961ad1b7af87f07a28ab37ce5762731453a5f7f767"),
+            ("har-r15", "0x9b05a423a031ced018bba945226540dc3edd8dc75d00e9599a3436fa1791e8a5"),
+            ("ev-har-r15", "0xdd7e3581c3acac711476e40ae561fd76c19bcc19a55761878249e915ec290c3c"),
+        ),
+    },
+)
 PRIMARY_HORIZONS = (1, 4)  # the pre-registered primary questions (docs/judging/r1.md)
 
 FetchClose = Callable[[str, int], float]  # (asset, hour start) -> close of the last candle opening at or before it
@@ -199,6 +222,35 @@ def _primary(diffs: dict[int, dict[int, list[float]]], expected: dict[tuple[int,
     return {"scope": scope, "mean": fmean(values) if values else None, "z": z, "issues": len(values)}
 
 
+def rule_statistics(
+    scores: dict[str, dict[tuple[int, int, str], float]],
+    expected: dict[tuple[int, int], int],
+    rules: Sequence[dict[str, Any]] = RULES,
+) -> list[dict[str, Any]]:
+    """Each rule's statistic so far: the judged forecaster against each opponent, by identity, on the issues from
+    the rule's start, as ``_primary`` computes it. Labelled as running: no verdict before a scheduled look."""
+    out = []
+    for rule in rules:
+        name, judged = rule["judged"]
+        own = scores.get(judged, {})
+        entry: dict[str, Any] = {
+            "rule": rule["rule"],
+            "start_issue": rule["start_issue"],
+            "judged": {"name": name, "id": judged},
+            "status": "running, unresolved",
+            "vs": {},
+        }
+        for opponent, ident in rule["opponents"]:
+            other = scores.get(ident, {})
+            diffs: dict[int, dict[int, list[float]]] = defaultdict(lambda: defaultdict(list))
+            for (issue, h, asset), value in own.items():
+                if issue >= rule["start_issue"] and (issue, h, asset) in other:
+                    diffs[issue][h].append(value - other[(issue, h, asset)])
+            entry["vs"][opponent] = {"id": ident, **_primary(diffs, expected)}
+        out.append(entry)
+    return out
+
+
 def scoreboard(settlements: Sequence[Settlement], *, baselines: Iterable[str] = BASELINES) -> dict[str, Any]:
     """Per forecaster identity: questions, mean log score overall and by horizon, and paired gains over each baseline.
 
@@ -227,6 +279,7 @@ def scoreboard(settlements: Sequence[Settlement], *, baselines: Iterable[str] = 
         "block_issues": BLOCK_ISSUES,
         "forecasters": {},
     }
+    board["rules"] = rule_statistics(scores, expected)
     for ident, own in sorted(scores.items(), key=lambda kv: labels[kv[0]]):
         name, release = labels[ident]
         entry: dict[str, Any] = {
