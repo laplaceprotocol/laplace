@@ -54,6 +54,9 @@ def build_parser() -> argparse.ArgumentParser:
     evolve.add_argument(
         "--max-usd", type=float, help="run: start no generation once the run's recorded cost has reached this"
     )
+    evolve.add_argument(
+        "--force", action="store_true", help="measure: score a measured run's holdout again (keeps the earlier result)"
+    )
     return parser
 
 
@@ -149,7 +152,7 @@ def main(argv: list[str] | None = None) -> int:
         elif args.action == "measure":
             from laplace_research.evolve import measure
 
-            print(measure.render(measure.measure(run_dir, workers=args.workers)))
+            print(measure.render(measure.measure(run_dir, workers=args.workers, force=args.force)))
         else:
             print(evolve_report.render(evolve_report.report(run_dir, workers=args.workers)))
     return 0

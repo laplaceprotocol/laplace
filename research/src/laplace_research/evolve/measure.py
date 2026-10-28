@@ -32,6 +32,7 @@ import numpy as np
 
 from laplace_research.data.events import load as load_calendar
 from laplace_research.evolve import learned
+from laplace_research.evolve.db import code_hash
 from laplace_research.evolve.evaluate import Evaluator, Outcome, log_scores, realized_bins
 from laplace_research.evolve.feed import HORIZONS, FloatArray, IntArray, finalize
 from laplace_research.evolve.pool import fit_pool, mix, realized_probs
@@ -70,17 +71,36 @@ def submit_chunks(evaluator: Evaluator, code: str, hours: IntArray, chunk_hours:
 
 
 def collect(futures: Sequence[Future[Outcome]]) -> FloatArray | str:
-    """A program's final forecasts over every chunk, or the first chunk's error."""
+    """A program's final forecasts over every chunk, or the first chunk's error. A crashed worker raises
+    ``BrokenProcessPool``: that is the machine's failure, not the program's."""
     parts = []
     for future in futures:
-        try:
-            outcome = future.result()
-        except BrokenProcessPool:
-            return "worker crashed"
+        outcome = future.result()
         if outcome.probs is None:
             return outcome.error or "no forecasts"
         parts.append(finalize(outcome.probs))
     return np.concatenate(parts, axis=2)
+
+
+def evaluate_all(
+    evaluator: Evaluator, codes: Sequence[str], hours: IntArray, chunk_hours: int, attempts: int = 3
+) -> dict[str, FloatArray | str]:
+    """Every program's final forecasts at ``hours``, or its error. A crashed worker breaks the whole pool and every
+    program still queued on it, so those programs are run again (a fresh pool); if workers keep crashing the
+    measurement stops, rather than let a crash decide which programs compete."""
+    out: dict[str, FloatArray | str] = {}
+    todo = list(codes)
+    for _ in range(attempts):
+        jobs = {code: submit_chunks(evaluator, code, hours, chunk_hours) for code in todo}
+        todo = []
+        for code, futures in jobs.items():
+            try:
+                out[code] = collect(futures)
+            except BrokenProcessPool:
+                todo.append(code)
+        if not todo:
+            return out
+    raise RuntimeError(f"workers crashed {attempts} times running {len(todo)} programs; nothing was measured")
 
 
 def per_hour(final: FloatArray, realized: IntArray) -> FloatArray:
@@ -121,8 +141,23 @@ def per_horizon_pool(members: Mapping[str, Forecasts], realized_val: IntArray) -
 
 
 def measure(
-    run_dir: Path, workers: int = 8, candidates: int = CANDIDATES, chunk_hours: int = CHUNK_HOURS
+    run_dir: Path,
+    workers: int = 8,
+    candidates: int = CANDIDATES,
+    chunk_hours: int = CHUNK_HOURS,
+    *,
+    force: bool = False,
 ) -> dict[str, Any]:
+    """Measure ``run_dir`` once. A run already measured is refused unless ``force`` (the earlier result is kept as
+    ``measure-<n>.json``): the holdout is scored once, and every look after the first has to say so."""
+    target = run_dir / "measure.json"
+    if target.exists():
+        if not force:
+            raise FileExistsError(f"{run_dir.name} has been measured already; its holdout is scored once")
+        n = 1
+        while (run_dir / f"measure-{n}.json").exists():
+            n += 1
+        target.rename(run_dir / f"measure-{n}.json")
     run = Run(run_dir)
     panel, cfg = run.panel, run.config
     search_start, search_end = parse_utc(cfg.search[0]), parse_utc(cfg.search[1])
@@ -142,14 +177,14 @@ def measure(
         name: {w: finalize(model.probs(h)) for w, h in hours.items()} for name, model in models.items()
     }
 
-    seed = next(p for p in run.db.all_programs() if p.mutator == "seed")
+    programs = run.db.all_programs()
+    seed = next(p for p in programs if p.mutator == "seed")
     islands = [(str(i["name"]), run.db.best(int(i["id"]), candidates)) for i in run.db.islands()]
     failures: dict[str, str] = {}
     champions: list[dict[str, Any]] = []
     with Evaluator(run_dir / "panel.npz", workers=workers) as evaluator:
-        codes = {seed.code} | {p.code for _, best in islands for p in best}
-        jobs = {code: submit_chunks(evaluator, code, hours["validation"], chunk_hours) for code in codes}
-        validation = {code: collect(futures) for code, futures in jobs.items()}
+        codes = list(dict.fromkeys([seed.code, *(p.code for _, best in islands for p in best)]))
+        validation = evaluate_all(evaluator, codes, hours["validation"], chunk_hours)
         for island, best in islands:
             scored = []
             for p in best:
@@ -165,30 +200,33 @@ def measure(
                 )
         if not champions:
             raise RuntimeError(f"no champion survived validation: {failures}")
-        holdout_codes = {seed.code} | {c["program"].code for c in champions}
-        jobs = {code: submit_chunks(evaluator, code, hours["holdout"], chunk_hours) for code in holdout_codes}
-        holdout = {code: collect(futures) for code, futures in jobs.items()}
+        candidate = max(champions, key=lambda c: c["score"])  # chosen before any holdout forecast exists
+        holdout_codes = list(dict.fromkeys([seed.code, *(c["program"].code for c in champions)]))
+        holdout = evaluate_all(evaluator, holdout_codes, hours["holdout"], chunk_hours)
 
     seed_val, seed_hold = validation[seed.code], holdout[seed.code]
     if isinstance(seed_val, str) or isinstance(seed_hold, str):
         raise RuntimeError(f"the seed program failed: {seed_val if isinstance(seed_val, str) else seed_hold}")
     forecasts["seed"] = {"validation": seed_val, "holdout": seed_hold}
-    candidate = max(champions, key=lambda c: c["score"])
     for c in champions:
         out = holdout[c["program"].code]
         if isinstance(out, str):
             failures[f"{c['name']} on the holdout"] = out
             continue
         forecasts[c["name"]] = {"validation": c["forecasts"], "holdout": out}
-    scored_champions = [c["name"] for c in champions if c["name"] in forecasts]
-
-    pools: dict[str, Any] = {}
     if candidate["name"] in forecasts:
         forecasts["candidate"] = forecasts[candidate["name"]]
-        for opponent in ("ev-har", "ev-gbm"):
-            label = f"pool(champions+{opponent})"
-            members = {n: forecasts[n] for n in (*scored_champions, opponent)}
-            pools[label], forecasts[label] = per_horizon_pool(members, realized["validation"])
+
+    # Pool members are fixed before the holdout: a champion that fails there fails its pools, it is not dropped.
+    pools: dict[str, Any] = {}
+    failed = [c["name"] for c in champions if c["name"] not in forecasts]
+    for opponent in ("ev-har", "ev-gbm"):
+        label = f"pool(champions+{opponent})"
+        if failed:
+            pools[label] = {"failed": f"members failed on the holdout: {', '.join(failed)}"}
+            continue
+        members = {n: forecasts[n] for n in (*(c["name"] for c in champions), opponent)}
+        pools[label], forecasts[label] = per_horizon_pool(members, realized["validation"])
 
     def diff(a: str, b: str, w: str) -> FloatArray:
         out: FloatArray = per_hour(forecasts[a][w], realized[w]) - per_hour(forecasts[b][w], realized[w])
@@ -232,13 +270,20 @@ def measure(
             if m.any():
                 segment_gains[name] = {"share": float(m.mean()), "mean": float(gain[:, JUDGED][m].mean())}
 
-    primary = comparisons.get(f"{PRIMARY[0]} vs {PRIMARY[1]}", {}).get("holdout", {}).get("1h+4h")
+    primary: dict[str, Any] = {"comparison": f"{PRIMARY[0]} vs {PRIMARY[1]}, holdout, 1h+4h"}
+    if "candidate" in forecasts:
+        scored = comparisons[f"{PRIMARY[0]} vs {PRIMARY[1]}"]["holdout"]["1h+4h"]
+        primary |= scored | {"beats": scored["interval95_72h"][0] > 0}
+    else:  # a candidate that cannot forecast the holdout does not beat anything
+        primary |= {"beats": False, "failure": failures[f"{candidate['name']} on the holdout"]}
     result: dict[str, Any] = {
         "run": run_dir.name,
         "config": json.loads((run_dir / "config.json").read_text()),
+        "programs": len(programs),
+        "last_generation": run.db.last_generation(),
         "hours": {w: len(h) for w, h in hours.items()},
         "candidates_per_island": candidates,
-        "seed_program_id": seed.id,
+        "seed": {"program_id": seed.id, "sha256": code_hash(seed.code)},
         "champions": champion_rows,
         "candidate": candidate["name"],
         "failures": failures,
@@ -246,13 +291,7 @@ def measure(
         "comparisons": comparisons,
         "candidate_vs_ev_har_by_segment_holdout_1h4h": segment_gains,
         "ev_gbm_rounds": models["ev-gbm"].params["gbm"]["rounds"],
-        "primary": None
-        if primary is None
-        else {
-            "comparison": f"{PRIMARY[0]} vs {PRIMARY[1]}, holdout, 1h+4h",
-            **primary,
-            "beats": primary["interval95_72h"][0] > 0,
-        },
+        "primary": primary,
     }
     (run_dir / "measure.json").write_text(json.dumps(result, indent=1) + "\n")
     (run_dir / "measure.md").write_text(render(result))
@@ -276,8 +315,10 @@ def render(r: dict[str, Any]) -> str:
         "per forecast hour; 95% intervals from a circular block bootstrap over 72-hour blocks.",
         "",
     ]
-    if r["primary"] is not None:
-        p = r["primary"]
+    p = r["primary"]
+    if "failure" in p:
+        lines += [f"**Primary ({p['comparison']}):** the candidate failed on the holdout ({p['failure']}).", ""]
+    else:
         lines += [
             f"**Primary ({p['comparison']}):** {p['mean']:+.4f}, 72h blocks {p['interval95_72h'][0]:+.4f} to "
             f"{p['interval95_72h'][1]:+.4f}, 168h blocks {p['interval95_168h'][0]:+.4f} to "
@@ -293,11 +334,14 @@ def render(r: dict[str, Any]) -> str:
             cells = " | ".join(_cell(row[w], s) for s in SCOPES)
             lines.append(f"| {name} | {w} | {cells} |")
     lines += ["", "1h+4h by month (validation months chose the champions; holdout months chose nothing):", ""]
-    months = sorted({m for row in r["comparisons"].values() for w in WINDOWS for m in row[w]["months_1h4h"]})
-    lines += ["| comparison | " + " | ".join(months) + " |", "|---|" + "---|" * len(months)]
+    columns = sorted(
+        {(w, m) for row in r["comparisons"].values() for w in WINDOWS for m in row[w]["months_1h4h"]},
+        key=lambda wm: (WINDOWS.index(wm[0]), wm[1]),
+    )
+    lines += ["| comparison | " + " | ".join(f"{m} ({w})" for w, m in columns) + " |", "|---|" + "---|" * len(columns)]
     for name, row in r["comparisons"].items():
-        by_month = row["validation"]["months_1h4h"] | row["holdout"]["months_1h4h"]
-        lines.append(f"| {name} | " + " | ".join(f"{by_month[m]:+.4f}" if m in by_month else "" for m in months) + " |")
+        by_month = (row[w]["months_1h4h"].get(m) for w, m in columns)
+        lines.append(f"| {name} | " + " | ".join("" if c is None else f"{c:+.4f}" for c in by_month) + " |")
     lines += [
         "",
         "Champions against EV-HAR, 1h+4h:",
@@ -315,6 +359,9 @@ def render(r: dict[str, Any]) -> str:
         for name, s in r["candidate_vs_ev_har_by_segment_holdout_1h4h"].items():
             lines.append(f"| {name} | {s['share']:.0%} | {s['mean']:+.4f} |")
     for label, fits in r["pools"].items():
+        if "failed" in fits:
+            lines += ["", f"**{label}**: not scored, {fits['failed']}."]
+            continue
         lines += ["", f"**{label}** weights (fitted on validation, per horizon):", ""]
         names = list(next(iter(fits.values()))["weights"])
         lines += ["| member | " + " | ".join(fits) + " |", "|---|" + "---:|" * len(fits)]

@@ -208,7 +208,10 @@ class Run:
 
     async def evolve(self, generations: int, children: int, workers: int, max_usd: float | None = None) -> None:
         """Run ``generations`` more generations. With ``max_usd``, no generation starts once the run's recorded cost
-        (every generation so far, earlier invocations included) has reached it; one already running finishes."""
+        (every generation so far, earlier invocations included) has reached it; one already running finishes. A run
+        whose holdout has been measured (``evolve.measure``) evolves no further: its holdout is scored once."""
+        if (self.dir / "measure.json").exists():
+            raise RuntimeError(f"{self.dir.name}'s holdout has been measured; start a new run to evolve further")
         islands = self.db.islands()
         start = self.db.last_generation() + 1
         if self._spent(max_usd):
