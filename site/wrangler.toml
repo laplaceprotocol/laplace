@@ -1,0 +1,12 @@
+# The public page at laplaceprotocol.com: static files only, no Worker code runs. The account comes from
+# CLOUDFLARE_ACCOUNT_ID at deploy time; the custom domain gets its DNS record on the first deploy.
+name = "laplace-site"
+compatibility_date = "2026-09-01"
+workers_dev = false
+preview_urls = false
+routes = [{ pattern = "laplaceprotocol.com", custom_domain = true }]
+
+[assets]
+directory = "./public"
+html_handling = "auto-trailing-slash"
+not_found_handling = "none"
