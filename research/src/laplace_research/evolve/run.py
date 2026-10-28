@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import math
 import random
 import sqlite3
 import sys
@@ -44,6 +45,7 @@ from laplace_research.evolve.panel import Panel
 from laplace_research.inference import AuthError, BudgetExceeded, Credentials, InferenceError, WorkersAI
 
 TIME_LIMIT_S = 90
+TIME_LIMIT_HOURS = 506  # the forecast hours TIME_LIMIT_S covers: PoC 2's search sample, 10,626 program calls
 MODEL_CONCURRENCY = {
     "@cf/deepseek-ai/deepseek-v4.1-flash-1017": 4,
     "@cf/zai-org/glm-5.3": 6,
@@ -53,6 +55,12 @@ MODEL_CONCURRENCY = {
 
 def parse_utc(text: str) -> datetime:
     return datetime.fromisoformat(text).replace(tzinfo=UTC)
+
+
+def time_limit_s(hours: int) -> int:
+    """The time limit for evaluating a program at ``hours`` forecast hours: TIME_LIMIT_S per TIME_LIMIT_HOURS (about
+    8 ms a call), so a denser sample does not tighten a program's budget."""
+    return max(TIME_LIMIT_S, math.ceil(TIME_LIMIT_S * hours / TIME_LIMIT_HOURS))
 
 
 @dataclass(frozen=True)
@@ -188,7 +196,7 @@ class Run:
         return run
 
     def score(self, evaluator: Evaluator, code: str) -> Score:
-        outcome = evaluator.run(code, self.search.times, TIME_LIMIT_S)
+        outcome = evaluator.run(code, self.search.times, time_limit_s(len(self.search.times)))
         if outcome.probs is None:
             return Score(error=outcome.error, eval_seconds=outcome.seconds)
         log_p = log_scores(finalize(outcome.probs), self.search_realized)

@@ -7,7 +7,7 @@ import pytest
 from laplace_research.evolve import run as run_module
 from laplace_research.evolve.islands import read_islands
 from laplace_research.evolve.panel import Panel
-from laplace_research.evolve.run import Run
+from laplace_research.evolve.run import Run, time_limit_s
 
 
 def test_island_hypotheses_come_from_a_toml_file_in_its_order(tmp_path: Path) -> None:
@@ -60,3 +60,9 @@ def test_a_run_whose_recorded_cost_reached_its_cap_starts_no_generation(
     monkeypatch.setattr(run_module, "Credentials", _NoModels)
     asyncio.run(run.evolve(generations=3, children=1, workers=1, max_usd=0.5))
     assert run.db.last_generation() == 1
+
+
+def test_a_denser_search_sample_keeps_the_budget_per_call() -> None:
+    assert time_limit_s(506) == 90  # PoC 2's search sample
+    assert time_limit_s(100) == 90
+    assert time_limit_s(1_660) == 296  # every 7 hours: 90 s x 1,660 / 506, rounded up
