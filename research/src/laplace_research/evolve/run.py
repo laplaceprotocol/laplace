@@ -7,13 +7,25 @@ import json
 import random
 import sqlite3
 import sys
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from datetime import UTC, datetime, timedelta
 from functools import partial
 from pathlib import Path
 
+import numpy as np
+import numpy.typing as npt
+
+from laplace_research.data.events import load as load_calendar
 from laplace_research.evolve import panel as panel_mod
-from laplace_research.evolve.baselines import naive
+from laplace_research.evolve.baselines import (
+    ev_har,
+    hourly_returns,
+    iv_har,
+    naive,
+    overlay_features,
+    overlay_names,
+    trailing_mean,
+)
 from laplace_research.evolve.db import Database, Program
 from laplace_research.evolve.evaluate import (
     Evaluator,
@@ -24,7 +36,7 @@ from laplace_research.evolve.evaluate import (
     realized_bins,
     sample_times,
 )
-from laplace_research.evolve.feed import finalize
+from laplace_research.evolve.feed import HORIZONS, FloatArray, finalize
 from laplace_research.evolve.islands import ISLANDS, SEED_PROGRAM
 from laplace_research.evolve.mutate import MUTATORS, NoProgram, Scored, build_prompt, propose
 from laplace_research.evolve.panel import Panel
@@ -53,6 +65,7 @@ class RunConfig:
     holdout: tuple[str, str, int]
     baseline_fit_step: int = 2
     seed: int = 0
+    reference: str = "naive"  # what a program's gain is measured against: "naive" or "ev-har"
 
     @classmethod
     def default(cls, now: datetime) -> RunConfig:
@@ -62,7 +75,7 @@ class RunConfig:
             data_end=end,
             search=("2025-02-01T00:00", "2026-06-01T00:00", 23),
             validation=("2026-06-01T00:00", "2026-08-16T00:00", 5),
-            holdout=("2026-08-16T00:00", end, 3),
+            holdout=("2026-08-16T00:00", end, 5),  # a step coprime with 24 rotates through the clock
         )
 
     def split(self, panel: Panel, name: str) -> Split:
@@ -74,9 +87,12 @@ class RunConfig:
         return Split("fit", sample_times(panel, parse_utc(start), parse_utc(end), self.baseline_fit_step))
 
 
+REFERENCES = {"naive": "the naive baseline", "ev-har": "EV-HAR"}
+
+
 @dataclass(frozen=True)
 class Score:
-    """A program's result on the search window: either a gain over the naive baseline or an error."""
+    """A program's result on the search window: either a gain over the run's reference or an error."""
 
     gain: float | None = None
     breakdown: dict[str, float] | None = None
@@ -92,20 +108,88 @@ class Run:
         self.db = Database(run_dir / "programs.sqlite")
         self.search = self.config.split(self.panel, "search")
         self.search_realized = realized_bins(self.panel, self.search.times)
-        self.search_naive = log_scores(finalize(naive(self.panel.close).probs(self.search.times)), self.search_realized)
+        if self.config.reference not in REFERENCES:
+            raise ValueError(f"unknown reference {self.config.reference!r}")
+        self.reference = REFERENCES[self.config.reference]
+        self.search_reference = self._reference_scores()
+        self.segments = self._segments()
+
+    def _reference_scores(self) -> FloatArray:
+        """The reference's log scores on the search window; EV-HAR's (fitted on the search window, as the baselines
+        are) are cached next to the run, since fitting it takes minutes."""
+        times = self.search.times
+        if self.config.reference == "naive":
+            return log_scores(finalize(naive(self.panel.close).probs(times)), self.search_realized)
+        cache = self.dir / "reference-ev-har.npz"
+        if cache.exists():
+            with np.load(cache) as data:
+                if np.array_equal(data["times"], times):
+                    out: FloatArray = data["scores"]
+                    return out
+        fit = self.config.fit_times(self.panel)
+        realized_fit = realized_bins(self.panel, fit.times)
+        senses = self.panel.senses
+        iv = iv_har(self.panel.close, senses["rv"], senses["dvol"], self.panel.assets, realized_fit, fit.times)
+        ev = ev_har(iv, self.panel.close, self.panel.ts, load_calendar(), fit.times)
+        scores: FloatArray = log_scores(finalize(ev.probs(times)), self.search_realized)
+        np.savez(cache, times=times, scores=scores)
+        return scores
+
+    def _segments(self) -> dict[str, npt.NDArray[np.bool_]]:
+        """Where a program gains or loses, as ``[asset, horizon, sample]`` masks over the search window: by the week's
+        volatility (calm, normal, shock thirds per asset), around scheduled releases, in the US session, at weekends,
+        and on questions whose outcome landed in an outer bin."""
+        times = self.search.times
+        shape = self.search_realized.shape
+        week = trailing_mean(hourly_returns(self.panel.close) ** 2, 168)[:, times]
+        low, high = np.quantile(week, [1 / 3, 2 / 3], axis=1, keepdims=True)
+        out: dict[str, npt.NDArray[np.bool_]] = {
+            "calm": np.broadcast_to((week <= low)[:, None, :], shape),
+            "normal": np.broadcast_to(((week > low) & (week < high))[:, None, :], shape),
+            "shock": np.broadcast_to((week >= high)[:, None, :], shape),
+        }
+        calendar = load_calendar()
+        at = self.panel.ts[times] + 3600
+        releases = np.zeros(shape, dtype=bool)
+        session = np.zeros(shape, dtype=bool)
+        for j, h in enumerate(HORIZONS):
+            x = overlay_features(calendar, at, h)
+            names = overlay_names(h)
+            near = x[:, names.index("releases")] + x[:, names.index("recent-releases")] > 0
+            releases[:, j, :] = near[None, :]
+            session[:, j, :] = (x[:, names.index("us-session")] > 0)[None, :]
+        out["releases"] = releases
+        out["us session"] = session
+        out["weekend"] = np.broadcast_to((((at // 86_400) + 3) % 7 >= 5)[None, None, :], shape)
+        out["outer bins"] = np.isin(self.search_realized, (0, 1, 8, 9))
+        return out
 
     @staticmethod
-    def init(run_dir: Path, cache_dir: Path) -> Run:
+    def init(
+        run_dir: Path,
+        cache_dir: Path,
+        *,
+        seed_code: str = SEED_PROGRAM,
+        reference: str = "naive",
+        panel: Panel | None = None,
+    ) -> Run:
+        """A new run: every island seeded with ``seed_code`` and scored against ``reference``, on a fresh panel or on
+        ``panel`` (another run's, senses included: a reference or seed that reads senses needs them)."""
         if (run_dir / "config.json").exists():
             raise FileExistsError(f"{run_dir} already initialized")
         run_dir.mkdir(parents=True)
-        config = RunConfig.default(datetime.now(UTC) - timedelta(hours=1))
-        panel = panel_mod.build(parse_utc(config.data_start), parse_utc(config.data_end), cache_dir)
+        if panel is None:
+            end = datetime.now(UTC) - timedelta(hours=1)
+        else:
+            end = datetime.fromtimestamp(int(panel.ts[-1]) + 3600, UTC)
+        config = replace(RunConfig.default(end), reference=reference)
+        if panel is None:
+            panel = panel_mod.build(parse_utc(config.data_start), parse_utc(config.data_end), cache_dir)
         panel.save(run_dir / "panel.npz")
         (run_dir / "config.json").write_text(json.dumps(asdict(config), indent=1))
         run = Run(run_dir)
         with Evaluator(run_dir / "panel.npz", workers=1) as evaluator:
-            seed = run.score(evaluator, SEED_PROGRAM)
+            seed = run.score(evaluator, seed_code)
         if seed.error is not None:
             raise RuntimeError(f"the seed program failed: {seed.error}")
         for name, directive in ISLANDS.items():
@@ -114,7 +198,7 @@ class Run:
                 parent_id=None,
                 generation=0,
                 mutator="seed",
-                code=SEED_PROGRAM,
+                code=seed_code,
                 gain=seed.gain,
                 breakdown=seed.breakdown,
                 eval_seconds=seed.eval_seconds,
@@ -127,8 +211,8 @@ class Run:
             return Score(error=outcome.error, eval_seconds=outcome.seconds)
         log_p = log_scores(finalize(outcome.probs), self.search_realized)
         return Score(
-            gain=mean_gain(log_p, self.search_naive),
-            breakdown=breakdown(log_p, self.search_naive, self.panel.assets),
+            gain=mean_gain(log_p, self.search_reference),
+            breakdown=breakdown(log_p, self.search_reference, self.panel.assets, self.segments),
             eval_seconds=outcome.seconds,
         )
 
@@ -168,8 +252,8 @@ class Run:
         mutator = MUTATORS[_pick_mutator(g, c, index)]
         prompt = build_prompt(
             island["directive"],
-            _scored(parent),
-            [_scored(p) for p in inspirations],
+            _scored(parent, self.reference),
+            [_scored(p, self.reference) for p in inspirations],
             self.db.recent_failures(island_id, 3),
         )
         record = partial(
@@ -208,10 +292,11 @@ class Run:
         return score.gain
 
 
-def _scored(p: Program) -> Scored:
+def _scored(p: Program, reference: str) -> Scored:
+    """What a mutator is shown of a program's score: per horizon, and per segment where the run records them."""
     assert p.gain is not None
-    keep = {k: v for k, v in p.breakdown.items() if k.startswith("h")}
-    return Scored(p.code, p.gain, keep)
+    keep = {k: v for k, v in p.breakdown.items() if k.startswith(("h", "seg:"))}
+    return Scored(p.code, p.gain, keep, reference)
 
 
 def _pick_mutator(g: int, c: int, island_index: int) -> str:
