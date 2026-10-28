@@ -37,7 +37,7 @@ from laplace_research.evolve.evaluate import (
     realized_bins,
     sample_times,
 )
-from laplace_research.evolve.feed import HORIZONS, FloatArray, finalize
+from laplace_research.evolve.feed import HORIZONS, FloatArray, IntArray, finalize
 from laplace_research.evolve.islands import ISLANDS, SEED_PROGRAM
 from laplace_research.evolve.mutate import MUTATORS, NoProgram, Scored, build_prompt, propose
 from laplace_research.evolve.panel import Panel
@@ -113,7 +113,7 @@ class Run:
             raise ValueError(f"unknown reference {self.config.reference!r}")
         self.reference = REFERENCES[self.config.reference]
         self.search_reference = self._reference_scores()
-        self.segments = self._segments()
+        self.segments = segments(self.panel, self.search.times, self.search_realized)
 
     def _reference_scores(self) -> FloatArray:
         """The reference's log scores on the search window; EV-HAR's (fitted on the search window, as the baselines
@@ -135,35 +135,6 @@ class Run:
         scores: FloatArray = log_scores(finalize(ev.probs(times)), self.search_realized)
         np.savez(cache, times=times, scores=scores)
         return scores
-
-    def _segments(self) -> dict[str, npt.NDArray[np.bool_]]:
-        """Where a program gains or loses, as ``[asset, horizon, sample]`` masks over the search window: by the week's
-        volatility (calm, normal, shock thirds per asset), around scheduled releases, in the US session, at weekends,
-        and on questions whose outcome landed in an outer bin."""
-        times = self.search.times
-        shape = self.search_realized.shape
-        week = trailing_mean(hourly_returns(self.panel.close) ** 2, 168)[:, times]
-        low, high = np.quantile(week, [1 / 3, 2 / 3], axis=1, keepdims=True)
-        out: dict[str, npt.NDArray[np.bool_]] = {
-            "calm": np.broadcast_to((week <= low)[:, None, :], shape),
-            "normal": np.broadcast_to(((week > low) & (week < high))[:, None, :], shape),
-            "shock": np.broadcast_to((week >= high)[:, None, :], shape),
-        }
-        calendar = load_calendar()
-        at = self.panel.ts[times] + 3600
-        releases = np.zeros(shape, dtype=bool)
-        session = np.zeros(shape, dtype=bool)
-        for j, h in enumerate(HORIZONS):
-            x = overlay_features(calendar, at, h)
-            names = overlay_names(h)
-            near = x[:, names.index("releases")] + x[:, names.index("recent-releases")] > 0
-            releases[:, j, :] = near[None, :]
-            session[:, j, :] = (x[:, names.index("us-session")] > 0)[None, :]
-        out["releases"] = releases
-        out["us session"] = session
-        out["weekend"] = np.broadcast_to((((at // 86_400) + 3) % 7 >= 5)[None, None, :], shape)
-        out["outer bins"] = np.isin(self.search_realized, (0, 1, 8, 9))
-        return out
 
     @staticmethod
     def init(
@@ -317,6 +288,35 @@ class Run:
             eval_seconds=score.eval_seconds,
         )
         return score.gain
+
+
+def segments(panel: Panel, times: IntArray, realized: IntArray) -> dict[str, npt.NDArray[np.bool_]]:
+    """Where a forecaster gains or loses, as ``[asset, horizon, sample]`` masks over forecasts made at ``times``: by the
+    week's volatility (calm, normal and shock thirds per asset over these times), around scheduled releases, in the US
+    session, at weekends, and on questions whose outcome (``realized``, their bins) landed in an outer bin."""
+    shape = realized.shape
+    week = trailing_mean(hourly_returns(panel.close) ** 2, 168)[:, times]
+    low, high = np.quantile(week, [1 / 3, 2 / 3], axis=1, keepdims=True)
+    out: dict[str, npt.NDArray[np.bool_]] = {
+        "calm": np.broadcast_to((week <= low)[:, None, :], shape),
+        "normal": np.broadcast_to(((week > low) & (week < high))[:, None, :], shape),
+        "shock": np.broadcast_to((week >= high)[:, None, :], shape),
+    }
+    calendar = load_calendar()
+    at = panel.ts[times] + 3600
+    releases = np.zeros(shape, dtype=bool)
+    session = np.zeros(shape, dtype=bool)
+    for j, h in enumerate(HORIZONS):
+        x = overlay_features(calendar, at, h)
+        names = overlay_names(h)
+        near = x[:, names.index("releases")] + x[:, names.index("recent-releases")] > 0
+        releases[:, j, :] = near[None, :]
+        session[:, j, :] = (x[:, names.index("us-session")] > 0)[None, :]
+    out["releases"] = releases
+    out["us session"] = session
+    out["weekend"] = np.broadcast_to((((at // 86_400) + 3) % 7 >= 5)[None, None, :], shape)
+    out["outer bins"] = np.isin(realized, (0, 1, 8, 9))
+    return out
 
 
 def _scored(p: Program, reference: str) -> Scored:

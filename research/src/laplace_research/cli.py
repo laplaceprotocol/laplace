@@ -29,7 +29,7 @@ def build_parser() -> argparse.ArgumentParser:
     majors.add_argument("--agents", help="comma-separated model/directive ids (default: all)")
 
     evolve = sub.add_parser("evolve", help="evolutionary search over forecasting programs (PoC 2)")
-    evolve.add_argument("action", choices=["init", "run", "report", "senses", "events", "rolling"])
+    evolve.add_argument("action", choices=["init", "run", "report", "senses", "events", "rolling", "measure"])
     evolve.add_argument("--run-id", required=True)
     evolve.add_argument("--generations", type=int, default=4)
     evolve.add_argument("--children", type=int, default=2, help="children per island per generation")
@@ -146,6 +146,10 @@ def main(argv: list[str] | None = None) -> int:
             print(render_rolling(result))
         elif args.action == "run":
             asyncio.run(Run(run_dir).evolve(args.generations, args.children, args.workers, args.max_usd))
+        elif args.action == "measure":
+            from laplace_research.evolve import measure
+
+            print(measure.render(measure.measure(run_dir, workers=args.workers)))
         else:
             print(evolve_report.render(evolve_report.report(run_dir, workers=args.workers)))
     return 0

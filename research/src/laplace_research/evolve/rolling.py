@@ -59,7 +59,7 @@ def _per_hour(probs: FloatArray, realized: IntArray) -> FloatArray:
     return out
 
 
-def _fit(
+def fit_models(
     panel: Panel, calendar: Calendar, pw: learned.Panelwise, start: datetime, valid_from: datetime, test_from: datetime
 ) -> dict[str, Any]:
     """Every model fitted on ``[start, valid_from)``, the learned layers stopped on ``[valid_from, test_from)``."""
@@ -106,7 +106,7 @@ def rolling(
     scores: dict[int, dict[int, dict[str, FloatArray]]] = {}
     rounds = []
     for k in range(1, len(boundaries) - 1):
-        models = _fit(panel, calendar, pw, start, boundaries[k - 1], boundaries[k])
+        models = fit_models(panel, calendar, pw, start, boundaries[k - 1], boundaries[k])
         rounds.append({"test_start": boundaries[k].isoformat(), **models["ev-gbm"].params["gbm"]["rounds"]})
         scores[k] = {
             m: {name: _per_hour(model.probs(periods[m]), realized[m]) for name, model in models.items()}
