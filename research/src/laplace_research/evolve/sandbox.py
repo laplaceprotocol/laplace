@@ -18,7 +18,7 @@ import ast
 import builtins
 import math
 from collections.abc import Callable
-from types import ModuleType
+from types import CodeType, ModuleType
 from typing import Any
 
 import numpy as np
@@ -132,12 +132,22 @@ def _restricted_import(
     raise ImportError(f"import of {name} is not allowed")
 
 
-def load(source: str) -> Callable[[Any], Any]:
-    """Check ``source`` and return its ``forecast`` function, bound to a restricted namespace."""
-    tree = check(source)
+def compile_checked(source: str) -> CodeType:
+    """Check ``source`` and compile it, ready for ``instantiate``."""
+    return compile(check(source), "<program>", "exec")
+
+
+def instantiate(code: CodeType) -> Callable[[Any], Any]:
+    """Run compiled program code in a fresh restricted namespace and return its ``forecast`` function. Nothing a
+    program keeps at module level survives into the next instance."""
     namespace: dict[str, Any] = {"__builtins__": {**SAFE_BUILTINS, "__import__": _restricted_import}}
-    exec(compile(tree, "<program>", "exec"), namespace)
+    exec(code, namespace)
     fn = namespace.get("forecast")
     if not callable(fn):
         raise ProgramRejected("forecast is not callable")
     return fn  # type: ignore[no-any-return]
+
+
+def load(source: str) -> Callable[[Any], Any]:
+    """Check ``source`` and return its ``forecast`` function, bound to a restricted namespace."""
+    return instantiate(compile_checked(source))

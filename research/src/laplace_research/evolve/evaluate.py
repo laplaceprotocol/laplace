@@ -3,8 +3,10 @@
 Each evaluation runs in a fresh, spawned worker process (nothing inherited from the parent, which holds the full
 panel) with a CPU-time alarm and an address-space limit. The worker reads candles forward through
 ``history.HistoryReader``, so when a program forecasts at hour ``t`` its process has never loaded a candle after ``t``.
-The program is called once per (asset, horizon, time); any exception, timeout or malformed output rejects the whole
-program with a message that the next mutation prompt can show to the model.
+The program is called once per (asset, horizon, time), from a fresh instance of its module at every time, as the live
+engine runs it once per issue: nothing it keeps at module level carries from one forecast hour to the next. Any
+exception, timeout or malformed output rejects the whole program with a message that the next mutation prompt can
+show to the model.
 """
 
 from __future__ import annotations
@@ -32,7 +34,7 @@ from laplace_research.evolve.context import LOOKBACK
 from laplace_research.evolve.feed import HORIZONS, N_BINS, FloatArray, IntArray, bin_index
 from laplace_research.evolve.history import HistoryReader, ensure_history
 from laplace_research.evolve.panel import Panel
-from laplace_research.evolve.sandbox import ProgramRejected, load
+from laplace_research.evolve.sandbox import ProgramRejected, compile_checked, instantiate
 
 MAX_HORIZON = max(HORIZONS)
 MEMORY_LIMIT_BYTES = 3 * 1024**3
@@ -124,7 +126,7 @@ def _run(source: str, times: IntArray, time_limit_s: int, params: bytes | None =
         raise ValueError("forecast times must be non-decreasing")
     started = time.perf_counter()
     try:
-        fn = load(source)
+        code = compile_checked(source)
     except ProgramRejected as exc:
         return Outcome(None, f"rejected: {exc}", 0.0)
     try:
@@ -141,6 +143,7 @@ def _run(source: str, times: IntArray, time_limit_s: int, params: bytes | None =
     try:
         for n, t in enumerate(times):
             reader.advance_to(int(t))
+            fn = instantiate(code)
             for a in range(len(reader.assets)):
                 for j, h in enumerate(HORIZONS):
                     raw = np.asarray(fn(reader.context(a, int(t), h, arrays)), dtype=np.float64)
@@ -151,6 +154,8 @@ def _run(source: str, times: IntArray, time_limit_s: int, params: bytes | None =
         return Outcome(None, f"timed out after {time_limit_s}s", float(time_limit_s))
     except MemoryError:
         return Outcome(None, "ran out of memory", time.perf_counter() - started)
+    except ProgramRejected as exc:
+        return Outcome(None, f"rejected: {exc}", time.perf_counter() - started)
     except Exception as exc:  # the program's own failure, reported back to the next mutation
         return Outcome(None, f"{type(exc).__name__}: {exc}"[:400], time.perf_counter() - started)
     finally:

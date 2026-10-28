@@ -154,3 +154,15 @@ def test_workers_list_events_from_their_calendar_and_survive_a_broken_one(
     assert failed.probs is None
     assert failed.error is not None
     assert failed.error.startswith("calendar:")
+
+
+def test_every_forecast_hour_starts_from_a_fresh_instance_of_the_program(history: Path) -> None:
+    # As the live engine runs a program once per issue: state kept at module level lasts one hour, never longer.
+    counting = "CALLS = []\n\n\ndef forecast(ctx):\n    CALLS.append(1)\n    return [float(len(CALLS))] + [1.0] * 9\n"
+    times = np.arange(800, 805, dtype=np.int64)
+    with Evaluator(history, workers=1) as evaluator:
+        outcome = evaluator.run(counting, times, 30)
+    assert outcome.probs is not None
+    calls = outcome.probs[..., 0]  # [asset, horizon, time]: the call's number within its hour
+    expected = np.arange(7)[:, None, None] * 3 + np.arange(3)[None, :, None] + 1
+    np.testing.assert_array_equal(calls, np.broadcast_to(expected, calls.shape))
