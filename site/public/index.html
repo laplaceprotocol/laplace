@@ -1,0 +1,267 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Laplace · the live record</title>
+    <meta
+      name="description"
+      content="Hourly crypto forecasts, committed on Robinhood Chain before they can settle and scored in public against classical baselines."
+    />
+    <meta name="laplace:record" content="https://data.laplaceprotocol.com/v1/" />
+    <meta name="color-scheme" content="light dark" />
+    <link rel="icon" href="favicon.svg" type="image/svg+xml" />
+    <link rel="stylesheet" href="style.css" />
+    <script type="module" src="js/app.js"></script>
+  </head>
+  <body>
+    <header class="top">
+      <div class="wrap">
+        <a class="brand" href="#top" id="top">Laplace</a>
+        <nav aria-label="Sections">
+          <a href="#odds-section">Odds</a>
+          <a href="#record">Record</a>
+          <a href="#scores">Scores</a>
+          <a href="#verify">Verify</a>
+          <a href="#corrections">Corrections</a>
+          <a href="https://github.com/laplaceprotocol/laplace" rel="noopener">Code</a>
+        </nav>
+      </div>
+    </header>
+
+    <main class="wrap">
+      <section class="intro">
+        <h1>The live record</h1>
+        <p class="lede">
+          Every hour, Laplace's forecasters put probabilities on how far seven crypto assets will move over the next 1, 4
+          and 24 hours. The forecasts are committed to Robinhood Chain before any of them can settle, and scored in public
+          against classical baselines that answer the same questions.
+        </p>
+        <p>
+          Language models write and mutate small forecasting programs, a proper scoring rule judges them on past data, and
+          the survivors are pooled into one forecaster, the Demon. Learned and classical models answer next to it. Nothing
+          on this page is a verdict yet: the record began on 24 October 2026, and the rules that will judge it were fixed
+          before its results.
+        </p>
+      </section>
+
+      <section id="odds-section" aria-labelledby="odds-title">
+        <h2 id="odds-title">This hour's odds</h2>
+        <p>
+          What the two forecasters under a pre-registered rule committed for issue <span data-issue>…</span>: ten
+          probabilities for the log return from the hour's close to the close 1, 4 or 24 hours later. The outer bins are
+          open. These are the committed numbers, unchanged; whether they are any good is what the scores are for, and
+          they are not trading advice.
+        </p>
+        <div id="odds" class="loading">Reading the record…</div>
+      </section>
+
+      <section id="record" aria-labelledby="record-title">
+        <h2 id="record-title">The latest commitment</h2>
+        <div id="status" class="loading">Reading the record…</div>
+      </section>
+
+      <section id="scores" aria-labelledby="scores-title">
+        <h2 id="scores-title">Scores so far</h2>
+        <p class="callout">
+          <strong>Running, unresolved.</strong> Everything in this section is a running statistic. The record is judged
+          only at the looks its rules scheduled in advance, the first after 23 January 2027. Until then a positive number
+          is a direction, not a verdict, and so is a negative one. Scores are binned log scores in nats per question; a
+          gain is the difference on the same questions, issues weighted equally.
+        </p>
+        <div id="rules" class="rules loading">Reading the scoreboard…</div>
+
+        <h3>The ladder</h3>
+        <p>
+          From the simplest forecaster to the most elaborate. Each rung adds one idea to the ones below it and has to earn
+          it. The classical rungs are strong: on the PoC 2 holdout, EV-HAR alone got almost nine-tenths of the Demon's edge
+          over GARCH at 1 and 4 hours.
+        </p>
+        <div id="ladder" class="loading">Reading the scoreboard…</div>
+        <p class="small">
+          Live gains are paired: each forecaster against naive on the questions both answered, the 1- and 4-hour questions
+          of an issue together. Forecasters that joined the record later cover fewer and later hours, so read a row against
+          naive, not against the other rows; the rules above compare their forecasters on the same hours. Development
+          evidence comes from backtests that were inspected while the forecasters were built: it is why a forecaster is in
+          the record, not a measure of how good it is.
+        </p>
+
+        <details class="everyone">
+          <summary>Every forecaster in this hour's issue</summary>
+          <p class="small">
+            Mean log scores cover each forecaster's own questions, so rows with different counts are not comparable.
+            Gains are at 1 and 4 hours, paired with naive, GARCH and HAR of release r1 on the same questions. Evolved
+            programs are private until revealed; their identities have been public from their first issue, so a revealed
+            program can be matched to its whole record.
+          </p>
+          <div id="everyone">Reading the scoreboard…</div>
+        </details>
+      </section>
+
+      <section id="verify" aria-labelledby="verify-title">
+        <h2 id="verify-title">Check it yourself</h2>
+        <p>
+          Nothing here asks to be trusted. Every hour's forecasts are hashed into a Merkle tree, and its root goes to
+          <code>LaplaceLedger</code> within 15 minutes of the hour, before the shortest question can settle. The ledger only
+          accepts a commitment from the committer, only for an issue after the last one and only inside its window, so the
+          block time proves when the forecasts were sealed.
+        </p>
+        <ol>
+          <li>
+            keccak256 of <code>manifest.json</code> equals the manifest hash in the issue's <code>Committed</code> event,
+            the root equals <code>rootOf(issue)</code>, and the block falls inside the issue's window.
+          </li>
+          <li>
+            The leaves rebuilt from <code>forecasts.json</code> give that root, and every pool's forecasts are its members'
+            forecasts mixed with its weights.
+          </li>
+          <li>
+            Public programs, with their parameter files, rerun on the inputs the manifest identifies, give the published
+            forecasts.
+          </li>
+          <li>Once a private program is revealed, its source hashes to its identity and reruns to its record.</li>
+        </ol>
+        <p>The reference verifier does the first two from the public files and the chain:</p>
+        <pre><code>git clone https://github.com/laplaceprotocol/laplace
+cd laplace/engine &amp;&amp; uv sync
+uv run laplace-engine verify --issue <span data-issue>…</span></code></pre>
+        <p class="small">
+          The formats (leaves, tree, manifest, settlement) are in
+          <a href="https://github.com/laplaceprotocol/laplace/blob/main/docs/design/live-record.md" rel="noopener">the
+            live-record design note</a>.
+        </p>
+
+        <h3>Or check an issue here</h3>
+        <p>
+          This runs in your browser. It downloads the issue's files from <code>data.laplaceprotocol.com</code>, hashes them
+          with the keccak-256 in this page's own source, and asks Robinhood Chain's public RPC endpoints for the
+          commitment.
+        </p>
+        <div id="check" class="check"></div>
+
+        <aside class="callout">
+          <strong>What the record does not prove.</strong> It proves when each forecast was made and that it was not
+          changed afterwards. It does not prove that nothing else was forecast and discarded: the release fixes the
+          forecasters in advance and every issue lists all of them, failures included, which is what makes selective
+          reporting visible. The committer key is the ledger's only trust assumption; if it were ever compromised, a new
+          ledger would be deployed and announced, and the old record would stand as it is.
+        </aside>
+      </section>
+
+      <section id="corrections" aria-labelledby="corrections-title">
+        <h2 id="corrections-title">Corrections</h2>
+        <p>
+          When we find a mistake, the fix and the numbers it replaces stay side by side. Newest first; the same log is in
+          the repository as
+          <a href="https://github.com/laplaceprotocol/laplace/blob/main/docs/corrections.md" rel="noopener">docs/corrections.md</a>.
+        </p>
+        <ol class="log">
+          <li>
+            <h3><time datetime="2026-10-27">2026-10-27</time> Research returns as log price ratios</h3>
+            <p>
+              Research computed 4- and 24-hour returns as sums of hourly returns, while programs use log price ratios; the
+              two differed by about 1e-15 where a price came back to the same value. Rerun on ratios, EV-NET's gain over
+              EV-HAR stays +0.0084 nats per question (1 hour: +0.0169 instead of +0.0167), and no month moves by more than
+              0.0003.
+              <a href="https://github.com/laplaceprotocol/laplace/blob/main/docs/research/2026-10-27-learned-layer.md" rel="noopener">The note</a>
+            </p>
+          </li>
+          <li>
+            <h3><time datetime="2026-10-25">2026-10-25</time> The first day's committed candles were provisional</h3>
+            <p>
+              Coinbase re-aggregates a just-closed hourly candle a little over five minutes after the hour, and the engine
+              sealed at :00:30. Of the first day's 168 committed last candles, 9 differ from the exchange's final candles,
+              all in the close, by up to 0.19% (LINK, issue 498039). Those issues stand as committed, and settlement uses
+              the committed closes, so scores stay consistent with the record. Since issue 498048 the engine seals at :07,
+              after the re-aggregation.
+              <a href="https://github.com/laplaceprotocol/laplace/pull/27" rel="noopener">PR #27</a>
+            </p>
+          </li>
+          <li>
+            <h3><time datetime="2026-10-25">2026-10-25</time> The event study's comparison hours</h3>
+            <p>
+              The first event study compared the hours around scheduled releases with all hours, which mostly measures the
+              US session's clock. Against the same UTC hours on weekdays without releases, CPI's next three hours are 1.2x,
+              0.9x and 1.4x the usual variance, not 2.1x to 2.6x, and the jobs report's 1.0x to 1.3x. The quiet hour before
+              both holds (0.45x and 0.34x).
+              <a href="https://github.com/laplaceprotocol/laplace/pull/23" rel="noopener">PR #23</a>,
+              <a href="https://github.com/laplaceprotocol/laplace/blob/main/docs/research/2026-10-25-scheduled-events.md" rel="noopener">the note</a>
+            </p>
+          </li>
+          <li>
+            <h3><time datetime="2026-10-24">2026-10-24</time> The GARCH baseline was mis-fitted</h3>
+            <p>
+              GARCH's Student-t likelihood had an extra 1/ν in its normalizing constant, which pushed ν towards infinity
+              and left its volatility dynamics arbitrary. Fixed and rerun on the same programs and windows: GARCH moved
+              from −0.0016 to +0.0297 over naive, and the evolved pool's edge over it from +0.0426 to +0.0113 (−0.0151 to
+              +0.0312). The claim that the pool clearly beats GARCH was withdrawn.
+              <a href="https://github.com/laplaceprotocol/laplace/pull/9" rel="noopener">PR #9</a>,
+              <a href="https://github.com/laplaceprotocol/laplace/blob/main/docs/research/2026-10-24-poc2-evolution.md#corrections" rel="noopener">the note</a>
+            </p>
+          </li>
+          <li>
+            <h3><time datetime="2026-10-24">2026-10-24</time> PoC 2, after an independent review</h3>
+            <p>
+              Future candles were reachable from a program's context (no program used them); the pool was smoothed twice
+              when scored, which flattered it by about 0.0006 nats per question, and its weights were not fully fitted;
+              window boundaries leaked; intervals were too narrow; and the run cost about $2.9–3.5, not the $2.35 recorded.
+              Each was fixed with regression tests and the report rerun; the claim that the pool's edge over HAR was just
+              clear of zero was withdrawn.
+              <a href="https://github.com/laplaceprotocol/laplace/pull/4" rel="noopener">PR #4</a>,
+              <a href="https://github.com/laplaceprotocol/laplace/blob/main/docs/research/2026-10-24-poc2-evolution.md#corrections" rel="noopener">the note</a>
+            </p>
+          </li>
+        </ol>
+      </section>
+
+      <section id="docs" aria-labelledby="docs-title">
+        <h2 id="docs-title">Read more</h2>
+        <div class="columns">
+          <div>
+            <h3>How it is judged</h3>
+            <ul>
+              <li><a href="https://github.com/laplaceprotocol/laplace/blob/main/docs/judging/r1.md" rel="noopener">Rule r1</a>: the Demon against GARCH and HAR</li>
+              <li><a href="https://github.com/laplaceprotocol/laplace/blob/main/docs/judging/r2.md" rel="noopener">Rule r2</a>: EV-GBM against opponents fitted on the same data</li>
+            </ul>
+            <h3>How it works</h3>
+            <ul>
+              <li><a href="https://github.com/laplaceprotocol/laplace/blob/main/docs/design/live-record.md" rel="noopener">The live record</a>: questions, settlement, formats, releases</li>
+              <li><a href="https://github.com/laplaceprotocol/laplace/blob/main/docs/design/evolution-engine.md" rel="noopener">The evolution engine</a></li>
+            </ul>
+          </div>
+          <div>
+            <h3>Research, development evidence</h3>
+            <ul>
+              <li><a href="https://github.com/laplaceprotocol/laplace/blob/main/docs/research/2026-10-23-poc1-majors.md" rel="noopener">PoC 1</a>: language models against baselines</li>
+              <li><a href="https://github.com/laplaceprotocol/laplace/blob/main/docs/research/2026-10-24-poc2-evolution.md" rel="noopener">PoC 2</a>: evolved programs against GARCH and HAR</li>
+              <li><a href="https://github.com/laplaceprotocol/laplace/blob/main/docs/research/2026-10-25-scheduled-events.md" rel="noopener">Scheduled events</a> and EV-HAR</li>
+              <li><a href="https://github.com/laplaceprotocol/laplace/blob/main/docs/research/2026-10-27-learned-layer.md" rel="noopener">The learned layer</a> and <a href="https://github.com/laplaceprotocol/laplace/blob/main/docs/research/2026-10-27-ev-gbm.md" rel="noopener">EV-GBM</a></li>
+            </ul>
+          </div>
+          <div>
+            <h3>The data</h3>
+            <ul>
+              <li><a href="https://data.laplaceprotocol.com/v1/latest.json" rel="noopener">latest.json</a>, the newest issue</li>
+              <li><a href="https://data.laplaceprotocol.com/v1/scoreboard.json" rel="noopener">scoreboard.json</a>, every score</li>
+              <li><code>issues/&lt;n&gt;/</code> and <code>releases/&lt;name&gt;/</code> under <code>data.laplaceprotocol.com/v1/</code></li>
+              <li><a href="https://robinhoodchain.blockscout.com/address/0x15AaE63A0EF391559153bCF9c56E5E2BE916b2BE" rel="noopener">LaplaceLedger v2</a> on Robinhood Chain</li>
+            </ul>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <footer class="wrap">
+      <p>
+        <strong>No token yet.</strong> There is no Laplace token. Anything claiming to be one before an announcement on
+        <a href="https://x.com/laplaceproto" rel="noopener">@laplaceproto</a> is not ours.
+      </p>
+      <p class="small">
+        This page is static: it reads only the public record and Robinhood Chain's public RPC endpoints, sets no cookies
+        and loads nothing else. Its source is <code>site/</code> in
+        <a href="https://github.com/laplaceprotocol/laplace" rel="noopener">the repository</a>. Security reports:
+        <a href="mailto:security@laplaceprotocol.com">security@laplaceprotocol.com</a>.
+      </p>
+    </footer>
+  </body>
+</html>
