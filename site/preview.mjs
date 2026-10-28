@@ -1,6 +1,6 @@
-// A local preview of the page: serves public/ with the headers Cloudflare will send (public/_headers), and proxies
-// /v1/ to the public record, because the record does not send CORS headers to other origins yet. The page is pointed at
-// the proxy by rewriting its laplace:record meta tag; nothing else differs from what is deployed.
+// A local preview of the page: serves public/ with the headers Cloudflare will send (public/_headers), and proxies the
+// record's files under /v1/, because the record does not send CORS headers to other origins yet. The page is pointed
+// at the proxy by rewriting its laplace:record meta tag; nothing else differs from what is deployed.
 //
 //   node preview.mjs [--host 127.0.0.1] [--port 8787]
 
@@ -37,10 +37,14 @@ export function pointAtProxy(html, proxy) {
   return html.replace(tag, `<meta name="laplace:record" content="${proxy}" />`);
 }
 
-/** The record's URL for a proxied /v1/ path, or null if it would leave the record. */
+// The record's files the page reads, and nothing else, are proxied.
+const RECORD_FILE =
+  /^\/v1\/(latest\.json|scoreboard\.json|issues\/\d+\/[a-z0-9-]+\.json|releases\/r[0-9.]+\/programs\/[a-z0-9][a-z0-9.-]*)$/;
+
+/** The record's URL for a proxied /v1/ path, or null for anything that is not one of the record's files. */
 export function recordUrl(pathname) {
-  const target = new URL(RECORD + pathname.slice("/v1/".length));
-  return target.href.startsWith(RECORD) ? target : null;
+  const file = RECORD_FILE.exec(pathname)?.[1];
+  return file === undefined ? null : "https://data.laplaceprotocol.com/v1/" + file;
 }
 
 async function serve(request, response, headers) {

@@ -39,10 +39,19 @@ test("the corrections on the page are the corrections log, in order", () => {
   assert.deepEqual(fromPage, fromDoc);
 });
 
-test("the preview points the page at its proxy and never proxies another host", () => {
+test("the preview points the page at its proxy and proxies only the record's files", () => {
   assert.match(pointAtProxy(html, "/v1/"), /<meta name="laplace:record" content="\/v1\/" \/>/);
   assert.throws(() => pointAtProxy("<html></html>", "/v1/"));
-  assert.equal(recordUrl("/v1/latest.json").href, "https://data.laplaceprotocol.com/v1/latest.json");
-  assert.equal(recordUrl("/v1///example.com/x").host, "data.laplaceprotocol.com");
-  assert.equal(recordUrl("/v1/../secret"), null);
+  for (const file of [
+    "latest.json",
+    "scoreboard.json",
+    "issues/498103/manifest.json",
+    "issues/498095/settlement-24h.json",
+    "releases/r1.5/programs/ev-gbm-r15.params.json",
+  ]) {
+    assert.equal(recordUrl(`/v1/${file}`), `${record}${file}`);
+  }
+  for (const path of ["/v1///example.com/x", "/v1/../secret", "/v1/releases/../programs/x", "/v1/issues/1/a/b.json"]) {
+    assert.equal(recordUrl(path), null, path);
+  }
 });
