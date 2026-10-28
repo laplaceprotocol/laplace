@@ -1,8 +1,10 @@
+import asyncio
 from pathlib import Path
 
 import numpy as np
 import pytest
 
+from laplace_research.evolve import run as run_module
 from laplace_research.evolve.islands import read_islands
 from laplace_research.evolve.panel import Panel
 from laplace_research.evolve.run import Run
@@ -39,3 +41,22 @@ def test_init_refuses_no_islands_and_a_step_below_one_hour(panel: Panel, tmp_pat
         Run.init(tmp_path / "evolve-a", tmp_path / "cache", panel=panel, islands={})
     with pytest.raises(ValueError, match="at least 1 hour"):
         Run.init(tmp_path / "evolve-b", tmp_path / "cache", panel=panel, search_step=0)
+
+
+class _NoModels:
+    @classmethod
+    def from_env(cls) -> None:
+        raise AssertionError("a run over its cap must not reach the models")
+
+
+def test_a_run_whose_recorded_cost_reached_its_cap_starts_no_generation(
+    panel: Panel, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    run = Run.init(tmp_path / "evolve-t", tmp_path / "cache", panel=panel, islands={"tails": "Fat tails."})
+    island = int(run.db.islands()[0]["id"])
+    run.db.add_program(
+        island_id=island, parent_id=None, generation=1, mutator="glm-5.3", code="", error="mutation: x", cost_usd=0.6
+    )
+    monkeypatch.setattr(run_module, "Credentials", _NoModels)
+    asyncio.run(run.evolve(generations=3, children=1, workers=1, max_usd=0.5))
+    assert run.db.last_generation() == 1

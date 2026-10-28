@@ -51,6 +51,9 @@ def build_parser() -> argparse.ArgumentParser:
         "--islands", type=Path, help="init: a TOML file of island names and their hypotheses (default: PoC 2's)"
     )
     evolve.add_argument("--search-step", type=int, help="init: hours between search samples (default 23)")
+    evolve.add_argument(
+        "--max-usd", type=float, help="run: start no generation once the run's recorded cost has reached this"
+    )
     return parser
 
 
@@ -142,7 +145,7 @@ def main(argv: list[str] | None = None) -> int:
             (run_dir / name).write_text(json.dumps(result, indent=1) + "\n")
             print(render_rolling(result))
         elif args.action == "run":
-            asyncio.run(Run(run_dir).evolve(args.generations, args.children, args.workers))
+            asyncio.run(Run(run_dir).evolve(args.generations, args.children, args.workers, args.max_usd))
         else:
             print(evolve_report.render(evolve_report.report(run_dir, workers=args.workers)))
     return 0

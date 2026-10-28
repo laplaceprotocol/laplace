@@ -227,12 +227,18 @@ class Run:
             eval_seconds=outcome.seconds,
         )
 
-    async def evolve(self, generations: int, children: int, workers: int) -> None:
+    async def evolve(self, generations: int, children: int, workers: int, max_usd: float | None = None) -> None:
+        """Run ``generations`` more generations. With ``max_usd``, no generation starts once the run's recorded cost
+        (every generation so far, earlier invocations included) has reached it; one already running finishes."""
         islands = self.db.islands()
         start = self.db.last_generation() + 1
+        if self._spent(max_usd):
+            return
         with Evaluator(self.dir / "panel.npz", workers=workers) as evaluator:
             async with WorkersAI(Credentials.from_env(), concurrency=16, model_limits=MODEL_CONCURRENCY) as ai:
                 for g in range(start, start + generations):
+                    if g > start and self._spent(max_usd):
+                        return
                     jobs = [
                         self._child(ai, evaluator, island, index, g, c)
                         for index, island in enumerate(islands)
@@ -247,6 +253,16 @@ class Run:
                         file=sys.stderr,
                         flush=True,
                     )
+
+    def _spent(self, max_usd: float | None) -> bool:
+        """Whether the recorded cost has reached ``max_usd`` (never, without a cap)."""
+        if max_usd is None:
+            return False
+        cost = float(self.db.meta()["cost_usd"])
+        if cost < max_usd:
+            return False
+        print(f"stopping: ${cost:.2f} recorded, the cap is ${max_usd:.2f}", file=sys.stderr, flush=True)
+        return True
 
     async def _child(
         self, ai: WorkersAI, evaluator: Evaluator, island: sqlite3.Row, index: int, g: int, c: int
