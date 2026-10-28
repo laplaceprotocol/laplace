@@ -89,7 +89,8 @@ ctx.lib.log_returns(close) -> hourly log returns (one element shorter)"""
 
 RULES = """\
 - Only `import math` and `import numpy as np`. No I/O, randomness, classes, global state or private attributes.
-- Fast: the program is called about 10,000 times per evaluation within a 90-second budget (aim for under 1 ms).
+- Fast: the program is called once per asset, horizon and sampled hour, 10,000 to 50,000 times per evaluation; an
+  evaluation fails if it takes more than about 8 ms a call (aim for under 1 ms).
 - Deterministic and robust: never return NaN or inf; handle flat or zero-volume hours.
 - No constants tuned to one asset or period unless you can justify them: the program is later judged on data it
   never saw, and overfitting is the most common way children fail."""

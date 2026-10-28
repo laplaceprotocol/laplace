@@ -3,6 +3,9 @@ the population diverse; nothing stops an island from abandoning its hypothesis i
 
 from __future__ import annotations
 
+import tomllib
+from pathlib import Path
+
 SEED_PROGRAM = '''\
 import math
 import numpy as np
@@ -51,3 +54,13 @@ ISLANDS: dict[str, str] = {
         "trend strength, recent jumps) and use a different forecast in each, or mix them by regime probability."
     ),
 }
+
+
+def read_islands(path: Path) -> dict[str, str]:
+    """Island hypotheses from a TOML file: one ``name = "directive"`` per island (multi-line strings allowed), in file
+    order. Line breaks and indentation inside a directive are folded into single spaces, as in ``ISLANDS``."""
+    data = tomllib.loads(path.read_text())
+    directives = {name: " ".join(str(text).split()) for name, text in data.items() if isinstance(text, str)}
+    if not directives or len(directives) != len(data) or not all(directives.values()):
+        raise ValueError(f"{path}: expected one non-empty directive string per island name")
+    return directives

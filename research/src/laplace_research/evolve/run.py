@@ -4,9 +4,11 @@ from __future__ import annotations
 
 import asyncio
 import json
+import math
 import random
 import sqlite3
 import sys
+from collections.abc import Mapping
 from dataclasses import asdict, dataclass, replace
 from datetime import UTC, datetime, timedelta
 from functools import partial
@@ -36,13 +38,14 @@ from laplace_research.evolve.evaluate import (
     realized_bins,
     sample_times,
 )
-from laplace_research.evolve.feed import HORIZONS, FloatArray, finalize
+from laplace_research.evolve.feed import HORIZONS, FloatArray, IntArray, finalize
 from laplace_research.evolve.islands import ISLANDS, SEED_PROGRAM
 from laplace_research.evolve.mutate import MUTATORS, NoProgram, Scored, build_prompt, propose
 from laplace_research.evolve.panel import Panel
 from laplace_research.inference import AuthError, BudgetExceeded, Credentials, InferenceError, WorkersAI
 
 TIME_LIMIT_S = 90
+TIME_LIMIT_HOURS = 506  # the forecast hours TIME_LIMIT_S covers: PoC 2's search sample, 10,626 program calls
 MODEL_CONCURRENCY = {
     "@cf/deepseek-ai/deepseek-v4.1-flash-1017": 4,
     "@cf/zai-org/glm-5.3": 6,
@@ -52,6 +55,12 @@ MODEL_CONCURRENCY = {
 
 def parse_utc(text: str) -> datetime:
     return datetime.fromisoformat(text).replace(tzinfo=UTC)
+
+
+def time_limit_s(hours: int) -> int:
+    """The time limit for evaluating a program at ``hours`` forecast hours: TIME_LIMIT_S per TIME_LIMIT_HOURS (about
+    8 ms a call), so a denser sample does not tighten a program's budget."""
+    return max(TIME_LIMIT_S, math.ceil(TIME_LIMIT_S * hours / TIME_LIMIT_HOURS))
 
 
 @dataclass(frozen=True)
@@ -112,7 +121,7 @@ class Run:
             raise ValueError(f"unknown reference {self.config.reference!r}")
         self.reference = REFERENCES[self.config.reference]
         self.search_reference = self._reference_scores()
-        self.segments = self._segments()
+        self.segments = segments(self.panel, self.search.times, self.search_realized)
 
     def _reference_scores(self) -> FloatArray:
         """The reference's log scores on the search window; EV-HAR's (fitted on the search window, as the baselines
@@ -135,35 +144,6 @@ class Run:
         np.savez(cache, times=times, scores=scores)
         return scores
 
-    def _segments(self) -> dict[str, npt.NDArray[np.bool_]]:
-        """Where a program gains or loses, as ``[asset, horizon, sample]`` masks over the search window: by the week's
-        volatility (calm, normal, shock thirds per asset), around scheduled releases, in the US session, at weekends,
-        and on questions whose outcome landed in an outer bin."""
-        times = self.search.times
-        shape = self.search_realized.shape
-        week = trailing_mean(hourly_returns(self.panel.close) ** 2, 168)[:, times]
-        low, high = np.quantile(week, [1 / 3, 2 / 3], axis=1, keepdims=True)
-        out: dict[str, npt.NDArray[np.bool_]] = {
-            "calm": np.broadcast_to((week <= low)[:, None, :], shape),
-            "normal": np.broadcast_to(((week > low) & (week < high))[:, None, :], shape),
-            "shock": np.broadcast_to((week >= high)[:, None, :], shape),
-        }
-        calendar = load_calendar()
-        at = self.panel.ts[times] + 3600
-        releases = np.zeros(shape, dtype=bool)
-        session = np.zeros(shape, dtype=bool)
-        for j, h in enumerate(HORIZONS):
-            x = overlay_features(calendar, at, h)
-            names = overlay_names(h)
-            near = x[:, names.index("releases")] + x[:, names.index("recent-releases")] > 0
-            releases[:, j, :] = near[None, :]
-            session[:, j, :] = (x[:, names.index("us-session")] > 0)[None, :]
-        out["releases"] = releases
-        out["us session"] = session
-        out["weekend"] = np.broadcast_to((((at // 86_400) + 3) % 7 >= 5)[None, None, :], shape)
-        out["outer bins"] = np.isin(self.search_realized, (0, 1, 8, 9))
-        return out
-
     @staticmethod
     def init(
         run_dir: Path,
@@ -172,9 +152,17 @@ class Run:
         seed_code: str = SEED_PROGRAM,
         reference: str = "naive",
         panel: Panel | None = None,
+        islands: Mapping[str, str] = ISLANDS,
+        search_step: int | None = None,
     ) -> Run:
-        """A new run: every island seeded with ``seed_code`` and scored against ``reference``, on a fresh panel or on
-        ``panel`` (another run's, senses included: a reference or seed that reads senses needs them)."""
+        """A new run: one island per ``islands`` hypothesis, each seeded with ``seed_code`` and scored against
+        ``reference``, on a fresh panel or on ``panel`` (another run's, senses included: a reference or seed that reads
+        senses needs them). ``search_step`` overrides the hours between search samples: a denser sample measures small
+        gains more precisely and costs evaluation time only."""
+        if not islands:
+            raise ValueError("a run needs at least one island")
+        if search_step is not None and search_step < 1:
+            raise ValueError(f"search step must be at least 1 hour, not {search_step}")
         if (run_dir / "config.json").exists():
             raise FileExistsError(f"{run_dir} already initialized")
         run_dir.mkdir(parents=True)
@@ -183,6 +171,8 @@ class Run:
         else:
             end = datetime.fromtimestamp(int(panel.ts[-1]) + 3600, UTC)
         config = replace(RunConfig.default(end), reference=reference)
+        if search_step is not None:
+            config = replace(config, search=(config.search[0], config.search[1], search_step))
         if panel is None:
             panel = panel_mod.build(parse_utc(config.data_start), parse_utc(config.data_end), cache_dir)
         panel.save(run_dir / "panel.npz")
@@ -192,7 +182,7 @@ class Run:
             seed = run.score(evaluator, seed_code)
         if seed.error is not None:
             raise RuntimeError(f"the seed program failed: {seed.error}")
-        for name, directive in ISLANDS.items():
+        for name, directive in islands.items():
             run.db.add_program(
                 island_id=run.db.add_island(name, directive),
                 parent_id=None,
@@ -206,7 +196,7 @@ class Run:
         return run
 
     def score(self, evaluator: Evaluator, code: str) -> Score:
-        outcome = evaluator.run(code, self.search.times, TIME_LIMIT_S)
+        outcome = evaluator.run(code, self.search.times, time_limit_s(len(self.search.times)))
         if outcome.probs is None:
             return Score(error=outcome.error, eval_seconds=outcome.seconds)
         log_p = log_scores(finalize(outcome.probs), self.search_realized)
@@ -216,12 +206,21 @@ class Run:
             eval_seconds=outcome.seconds,
         )
 
-    async def evolve(self, generations: int, children: int, workers: int) -> None:
+    async def evolve(self, generations: int, children: int, workers: int, max_usd: float | None = None) -> None:
+        """Run ``generations`` more generations. With ``max_usd``, no generation starts once the run's recorded cost
+        (every generation so far, earlier invocations included) has reached it; one already running finishes. A run
+        whose holdout has been measured (``evolve.measure``) evolves no further: its holdout is scored once."""
+        if (self.dir / "measure.json").exists():
+            raise RuntimeError(f"{self.dir.name}'s holdout has been measured; start a new run to evolve further")
         islands = self.db.islands()
         start = self.db.last_generation() + 1
+        if self._spent(max_usd):
+            return
         with Evaluator(self.dir / "panel.npz", workers=workers) as evaluator:
             async with WorkersAI(Credentials.from_env(), concurrency=16, model_limits=MODEL_CONCURRENCY) as ai:
                 for g in range(start, start + generations):
+                    if g > start and self._spent(max_usd):
+                        return
                     jobs = [
                         self._child(ai, evaluator, island, index, g, c)
                         for index, island in enumerate(islands)
@@ -236,6 +235,16 @@ class Run:
                         file=sys.stderr,
                         flush=True,
                     )
+
+    def _spent(self, max_usd: float | None) -> bool:
+        """Whether the recorded cost has reached ``max_usd`` (never, without a cap)."""
+        if max_usd is None:
+            return False
+        cost = float(self.db.meta()["cost_usd"])
+        if cost < max_usd:
+            return False
+        print(f"stopping: ${cost:.2f} recorded, the cap is ${max_usd:.2f}", file=sys.stderr, flush=True)
+        return True
 
     async def _child(
         self, ai: WorkersAI, evaluator: Evaluator, island: sqlite3.Row, index: int, g: int, c: int
@@ -290,6 +299,35 @@ class Run:
             eval_seconds=score.eval_seconds,
         )
         return score.gain
+
+
+def segments(panel: Panel, times: IntArray, realized: IntArray) -> dict[str, npt.NDArray[np.bool_]]:
+    """Where a forecaster gains or loses, as ``[asset, horizon, sample]`` masks over forecasts made at ``times``: by the
+    week's volatility (calm, normal and shock thirds per asset over these times), around scheduled releases, in the US
+    session, at weekends, and on questions whose outcome (``realized``, their bins) landed in an outer bin."""
+    shape = realized.shape
+    week = trailing_mean(hourly_returns(panel.close) ** 2, 168)[:, times]
+    low, high = np.quantile(week, [1 / 3, 2 / 3], axis=1, keepdims=True)
+    out: dict[str, npt.NDArray[np.bool_]] = {
+        "calm": np.broadcast_to((week <= low)[:, None, :], shape),
+        "normal": np.broadcast_to(((week > low) & (week < high))[:, None, :], shape),
+        "shock": np.broadcast_to((week >= high)[:, None, :], shape),
+    }
+    calendar = load_calendar()
+    at = panel.ts[times] + 3600
+    releases = np.zeros(shape, dtype=bool)
+    session = np.zeros(shape, dtype=bool)
+    for j, h in enumerate(HORIZONS):
+        x = overlay_features(calendar, at, h)
+        names = overlay_names(h)
+        near = x[:, names.index("releases")] + x[:, names.index("recent-releases")] > 0
+        releases[:, j, :] = near[None, :]
+        session[:, j, :] = (x[:, names.index("us-session")] > 0)[None, :]
+    out["releases"] = releases
+    out["us session"] = session
+    out["weekend"] = np.broadcast_to((((at // 86_400) + 3) % 7 >= 5)[None, None, :], shape)
+    out["outer bins"] = np.isin(realized, (0, 1, 8, 9))
+    return out
 
 
 def _scored(p: Program, reference: str) -> Scored:

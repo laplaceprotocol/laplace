@@ -29,7 +29,7 @@ def build_parser() -> argparse.ArgumentParser:
     majors.add_argument("--agents", help="comma-separated model/directive ids (default: all)")
 
     evolve = sub.add_parser("evolve", help="evolutionary search over forecasting programs (PoC 2)")
-    evolve.add_argument("action", choices=["init", "run", "report", "senses", "events", "rolling"])
+    evolve.add_argument("action", choices=["init", "run", "report", "senses", "events", "rolling", "measure"])
     evolve.add_argument("--run-id", required=True)
     evolve.add_argument("--generations", type=int, default=4)
     evolve.add_argument("--children", type=int, default=2, help="children per island per generation")
@@ -47,6 +47,16 @@ def build_parser() -> argparse.ArgumentParser:
         help="init: what a program's gain is measured against",
     )
     evolve.add_argument("--panel-from", help="init: start from another run's panel and senses (its run id)")
+    evolve.add_argument(
+        "--islands", type=Path, help="init: a TOML file of island names and their hypotheses (default: PoC 2's)"
+    )
+    evolve.add_argument("--search-step", type=int, help="init: hours between search samples (default 23)")
+    evolve.add_argument(
+        "--max-usd", type=float, help="run: start no generation once the run's recorded cost has reached this"
+    )
+    evolve.add_argument(
+        "--force", action="store_true", help="measure: score a measured run's holdout again (keeps the earlier result)"
+    )
     return parser
 
 
@@ -84,12 +94,20 @@ def main(argv: list[str] | None = None) -> int:
 
         run_dir = RUNS / f"evolve-{args.run_id}"
         if args.action == "init":
-            from laplace_research.evolve.islands import SEED_PROGRAM
+            from laplace_research.evolve.islands import ISLANDS, SEED_PROGRAM, read_islands
             from laplace_research.evolve.panel import Panel
 
             seed_code = args.seed.read_text() if args.seed else SEED_PROGRAM
             panel = Panel.load(RUNS / f"evolve-{args.panel_from}" / "panel.npz") if args.panel_from else None
-            Run.init(run_dir, CACHE / "candles", seed_code=seed_code, reference=args.reference, panel=panel)
+            Run.init(
+                run_dir,
+                CACHE / "candles",
+                seed_code=seed_code,
+                reference=args.reference,
+                panel=panel,
+                islands=read_islands(args.islands) if args.islands else ISLANDS,
+                search_step=args.search_step,
+            )
         elif args.action == "senses":
             from laplace_research.evolve import senses
             from laplace_research.evolve.panel import Panel
@@ -130,7 +148,11 @@ def main(argv: list[str] | None = None) -> int:
             (run_dir / name).write_text(json.dumps(result, indent=1) + "\n")
             print(render_rolling(result))
         elif args.action == "run":
-            asyncio.run(Run(run_dir).evolve(args.generations, args.children, args.workers))
+            asyncio.run(Run(run_dir).evolve(args.generations, args.children, args.workers, args.max_usd))
+        elif args.action == "measure":
+            from laplace_research.evolve import measure
+
+            print(measure.render(measure.measure(run_dir, workers=args.workers, force=args.force)))
         else:
             print(evolve_report.render(evolve_report.report(run_dir, workers=args.workers)))
     return 0
