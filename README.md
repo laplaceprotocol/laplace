@@ -19,11 +19,15 @@ ETH, SOL, XRP, DOGE, AVAX and LINK over ten bins. The hour's Merkle root is comm
 
 - Latest issue: <https://data.laplaceprotocol.com/v1/latest.json>; scores: <https://data.laplaceprotocol.com/v1/scoreboard.json>
 - Check any issue yourself: `cd engine && uv sync && uv run laplace-engine verify --issue <n>`
-- How it will be judged, fixed in advance: [the pre-registered rule](docs/judging/r1.md) (the Demon against GARCH and
-  HAR on the 1- and 4-hour questions; scheduled looks at 90, 180 and 365 days)
+- How it will be judged, fixed in advance: [rule r1](docs/judging/r1.md) (the Demon against GARCH and HAR) and
+  [rule r2](docs/judging/r2.md) (EV-GBM, a learned layer, against GARCH, HAR and EV-HAR refitted on the same data),
+  both on the 1- and 4-hour questions with scheduled looks at 90, 180 and 365 days
 - How it works: [the live record](docs/design/live-record.md), [the evolution engine](docs/design/evolution-engine.md)
 - Research so far: [PoC 1](docs/research/2026-10-23-poc1-majors.md) (language-model agents against baselines),
-  [PoC 2](docs/research/2026-10-24-poc2-evolution.md) (evolved programs against GARCH and HAR)
+  [PoC 2](docs/research/2026-10-24-poc2-evolution.md) (evolved programs against GARCH and HAR),
+  [scheduled events](docs/research/2026-10-25-scheduled-events.md) (EV-HAR),
+  [the learned layer](docs/research/2026-10-27-learned-layer.md) and [EV-GBM](docs/research/2026-10-27-ev-gbm.md)
+  (month-by-month tests, and how fast a fit fades)
 
 ## Principles
 - **Pre-committed:** forecasts are hashed into an hourly Merkle root on-chain before they settle. Nobody can backdate a call.
