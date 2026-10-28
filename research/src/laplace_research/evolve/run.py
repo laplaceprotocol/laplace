@@ -7,6 +7,7 @@ import json
 import random
 import sqlite3
 import sys
+from collections.abc import Mapping
 from dataclasses import asdict, dataclass, replace
 from datetime import UTC, datetime, timedelta
 from functools import partial
@@ -172,9 +173,17 @@ class Run:
         seed_code: str = SEED_PROGRAM,
         reference: str = "naive",
         panel: Panel | None = None,
+        islands: Mapping[str, str] = ISLANDS,
+        search_step: int | None = None,
     ) -> Run:
-        """A new run: every island seeded with ``seed_code`` and scored against ``reference``, on a fresh panel or on
-        ``panel`` (another run's, senses included: a reference or seed that reads senses needs them)."""
+        """A new run: one island per ``islands`` hypothesis, each seeded with ``seed_code`` and scored against
+        ``reference``, on a fresh panel or on ``panel`` (another run's, senses included: a reference or seed that reads
+        senses needs them). ``search_step`` overrides the hours between search samples: a denser sample measures small
+        gains more precisely and costs evaluation time only."""
+        if not islands:
+            raise ValueError("a run needs at least one island")
+        if search_step is not None and search_step < 1:
+            raise ValueError(f"search step must be at least 1 hour, not {search_step}")
         if (run_dir / "config.json").exists():
             raise FileExistsError(f"{run_dir} already initialized")
         run_dir.mkdir(parents=True)
@@ -183,6 +192,8 @@ class Run:
         else:
             end = datetime.fromtimestamp(int(panel.ts[-1]) + 3600, UTC)
         config = replace(RunConfig.default(end), reference=reference)
+        if search_step is not None:
+            config = replace(config, search=(config.search[0], config.search[1], search_step))
         if panel is None:
             panel = panel_mod.build(parse_utc(config.data_start), parse_utc(config.data_end), cache_dir)
         panel.save(run_dir / "panel.npz")
@@ -192,7 +203,7 @@ class Run:
             seed = run.score(evaluator, seed_code)
         if seed.error is not None:
             raise RuntimeError(f"the seed program failed: {seed.error}")
-        for name, directive in ISLANDS.items():
+        for name, directive in islands.items():
             run.db.add_program(
                 island_id=run.db.add_island(name, directive),
                 parent_id=None,

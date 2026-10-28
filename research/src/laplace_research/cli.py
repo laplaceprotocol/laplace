@@ -47,6 +47,10 @@ def build_parser() -> argparse.ArgumentParser:
         help="init: what a program's gain is measured against",
     )
     evolve.add_argument("--panel-from", help="init: start from another run's panel and senses (its run id)")
+    evolve.add_argument(
+        "--islands", type=Path, help="init: a TOML file of island names and their hypotheses (default: PoC 2's)"
+    )
+    evolve.add_argument("--search-step", type=int, help="init: hours between search samples (default 23)")
     return parser
 
 
@@ -84,12 +88,20 @@ def main(argv: list[str] | None = None) -> int:
 
         run_dir = RUNS / f"evolve-{args.run_id}"
         if args.action == "init":
-            from laplace_research.evolve.islands import SEED_PROGRAM
+            from laplace_research.evolve.islands import ISLANDS, SEED_PROGRAM, read_islands
             from laplace_research.evolve.panel import Panel
 
             seed_code = args.seed.read_text() if args.seed else SEED_PROGRAM
             panel = Panel.load(RUNS / f"evolve-{args.panel_from}" / "panel.npz") if args.panel_from else None
-            Run.init(run_dir, CACHE / "candles", seed_code=seed_code, reference=args.reference, panel=panel)
+            Run.init(
+                run_dir,
+                CACHE / "candles",
+                seed_code=seed_code,
+                reference=args.reference,
+                panel=panel,
+                islands=read_islands(args.islands) if args.islands else ISLANDS,
+                search_step=args.search_step,
+            )
         elif args.action == "senses":
             from laplace_research.evolve import senses
             from laplace_research.evolve.panel import Panel
