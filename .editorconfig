@@ -8,10 +8,15 @@ trim_trailing_whitespace = true
 indent_style = space
 indent_size = 4
 
-[*.{yml,yaml,json,toml,md}]
+[*.{yml,yaml,json,toml,md,js,mjs,html,css,svg}]
 indent_size = 2
 
 # A release's programs and parameter files are identified by the hash of their exact bytes.
 [engine/releases/**]
+insert_final_newline = unset
+trim_trailing_whitespace = unset
+
+# An issue kept as a test fixture, byte for byte as published: its hashes are checked against the chain's.
+[site/test/fixtures/issue-*/**]
 insert_final_newline = unset
 trim_trailing_whitespace = unset
